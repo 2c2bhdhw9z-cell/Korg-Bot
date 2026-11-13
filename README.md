@@ -72,3 +72,9 @@ Three optional one-tap packs add compatible features without disabling existing 
 Six offline palettes are included: **Amethyst, Midnight, Rose, Ocean, Forest, and Ember**, plus restoration of Discord's default. Fonts has a shortcut to Rain's importer; no font files are claimed to be bundled. The design preview includes representative feature selections stored only in the browser, explicitly separate from the native app.
 
 Plugin preferences use tracked writes and rollback; optional plugins wait for readable settings, while core recovery stays available. Startup completion cannot overwrite a preference saved for the next reload. Native/iOS 27 runtime compatibility still requires device testing; successful compilation is not proof that every bundled plugin works on that OS.
+
+## Repackage a supplied Discord 352 IPA
+
+`scripts/package-ipa.py` assembles a separate unsigned output from the specific unencrypted Discord 352/VoiceMenu input layout. It does not download Discord or remove encryption. The CLI pins the trusted Korg 0.2 native artifact SHA-256 by default, verifies its manifest, replaces the exact VoiceMenu weak-load command, and validates embedded binary dependencies. Supply a compatible arm64 hook runtime and its license for the current loader. See `--help` for local-file arguments. No IPA, provisioning profile, or credential is committed.
+
+Run the packager checks with `python3 -m unittest discover -s tests -p 'test_package_ipa.py'`. They cover Mach-O bounds/padding, thin and FAT binaries, encryption rejection, symbol exports, artifact tampering, ZIP paths, dependencies, permissions, and preservation of original resources. An inspection JSON beside the output records hashes and changes. Signing and device runtime verification remain separate.

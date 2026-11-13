@@ -2,7 +2,15 @@
 
 Korg adds its own settings and built-in themes to Rain. Chats, calls, accounts, and the rest of Discord continue to use Discord's existing app. This first build is experimental and has not been tested inside Discord on a physical iPhone.
 
-## What you have
+## Packaged IPA for the supplied Discord 352 app
+
+`Korg-0.2.0-Discord-352-unsigned.ipa` is an assembled app package, ready to import into an iPhone sideload signer. Its original VoiceMenu tweak and startup reference have been removed. Korg's loader, complete resource bundle, and ElleKit 1.1.3 hook runtime are included; their source/license notices are inside `BunnyResources.bundle/KorgDistribution`. No hosting or extra tweak injection is required.
+
+The package is **unsigned**. Your signer must sign the main app, extensions, frameworks, and added libraries and manage provisioning/entitlements. No signing credentials are needed in chat. It preserves Discord's original bundle identifier for the signer to configure. To keep regular Discord installed alongside Korg, use the signer's duplicate-app/custom-identifier option and a matching provisioning profile; do not replace your installed Discord unintentionally.
+
+Static checks passed for ZIP integrity, all 11 Mach-O dependency graphs, removal of VoiceMenu, and the embedded Korg files. This does not establish iOS 27.0.1 runtime compatibility; first launch on the phone remains untested.
+
+## Standalone build components
 
 - `korg.js`: Korg's JavaScript bundle, loaded by a compatible RainTweak installation.
 - `korg.98.hbc` (or the version recorded in `manifest.json`): the same bundle compiled for a particular Hermes engine. Prefer plain `korg.js` for the loader's custom-URL feature unless you have verified the engine version matches.
