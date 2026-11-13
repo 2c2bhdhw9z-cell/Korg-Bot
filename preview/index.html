@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en" data-theme="amethyst">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#140F20">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Korg — a local design preview of an iOS Discord mod built on Rain. Sample chats only.">
+  <title>Korg · Design preview</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <symbol id="korg-mark" viewBox="0 0 64 64">
+        <path fill="currentColor" d="M12 16c0-6 4-10 10-10s10 4 10 10v11L43 11c4-6 10-6 14-2s3 9 0 13L46 35l12 13c4 5 3 11-2 14-5 3-10 1-14-4L32 44v10c0 6-4 10-10 10S12 60 12 54V16Z" transform="translate(-3 -2) scale(.95)"/>
+      </symbol>
+      <symbol id="chat-icon" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a9 9 0 0 1 18 0Z"/><path d="M7 10h8M7 14h5"/></symbol>
+      <symbol id="server-icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+      <symbol id="arrow-icon" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 5v15"/></symbol>
+      <symbol id="chevron-icon" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    </defs>
+  </svg>
+  <div class="app" data-view="chats">
+    <header class="topbar">
+      <div class="wordmark"><svg aria-hidden="true"><use href="#korg-mark"/></svg><span>Korg<span class="working-name">working name</span></span></div>
+      <span class="preview-badge"><span aria-hidden="true"></span>Design preview · sample chats</span>
+    </header>
+
+    <div class="workspace">
+      <aside class="server-rail" aria-label="Sample servers">
+        <div class="rail-caption" aria-hidden="true">YOUR<br>SPACES</div>
+        <div id="server-buttons"></div>
+        <div class="rail-line"></div>
+        <span class="rail-footnote">LOCAL<br>ONLY</span>
+      </aside>
+
+      <section class="channels-panel" aria-labelledby="server-name">
+        <div class="server-heading">
+          <span class="eyebrow">A little corner of the internet</span>
+          <h1 id="server-name" tabindex="-1">The Common Room</h1>
+          <p id="server-description">Good music. Half-finished ideas. Your people.</p>
+        </div>
+        <div class="channel-section-title">TEXT CHANNELS <span id="channel-count">3</span></div>
+        <nav id="channel-list" aria-label="Sample channels"></nav>
+        <div class="sidebar-note">
+          <span class="note-star" aria-hidden="true">✳</span>
+          <p>A space to make<br><strong>a little more yours.</strong></p>
+          <button class="text-button" id="customize-button">Find your colors <span aria-hidden="true">↗</span></button>
+        </div>
+        <div class="local-profile"><span class="avatar you-avatar">Y</span><div><strong>You, for now</strong><span>Exploring the preview</span></div><span class="local-pill">DEMO</span></div>
+      </section>
+
+      <main class="main-panel" id="main-content">
+        <section id="chat-page" class="chat-page" aria-labelledby="chat-title">
+          <header class="chat-heading">
+            <div class="channel-heading-icon" aria-hidden="true">#</div>
+            <div><h2 id="chat-title" tabindex="-1">on-repeat</h2><p id="chat-topic">The songs that stay with you.</p></div>
+            <span class="sample-label">SAMPLE CHAT</span>
+          </header>
+          <div id="conversation" class="conversation" tabindex="0" aria-label="Sample conversation">
+            <div class="conversation-intro"><div class="intro-mark" aria-hidden="true">#</div><span class="eyebrow">PULL UP A CHAIR</span><h3 id="welcome-title">A good place to press play.</h3><p id="welcome-description">New discoveries, old favorites, and one more song.</p></div>
+            <div class="date-divider"><span>Sample conversation</span></div>
+            <div id="messages" role="list" aria-label="Messages"></div>
+          </div>
+          <div class="composer-area">
+            <form id="message-form" class="composer">
+              <label for="message-input" class="sr-only">Write a local sample message</label>
+              <textarea id="message-input" rows="1" maxlength="2000" placeholder="Add to the conversation…" aria-describedby="composer-help"></textarea>
+              <button class="send-button" type="submit" aria-label="Send local sample message" disabled><svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></button>
+            </form>
+            <p id="composer-help">Sample chats only. Messages stay in this page and are not sent to Discord.</p>
+          </div>
+        </section>
+
+        <section id="korg-page" class="korg-page" aria-labelledby="korg-title" hidden>
+          <div class="settings-topline"><span class="eyebrow">YOUR LITTLE UPGRADE</span><span class="version-pill">DESIGN STUDY 01</span></div>
+          <div class="korg-hero">
+            <div class="hero-copy"><h2 id="korg-title" tabindex="-1">Your Discord,<br>a little more <em>you.</em></h2><p>Meet Korg. A softer shade of familiar,<br>built on Rain for iOS.</p></div>
+            <div class="hero-mascot" aria-hidden="true"><svg><use href="#korg-mark"/></svg><span class="mascot-spark">✳</span></div>
+          </div>
+          <fieldset class="theme-fieldset">
+            <legend>Find your colors</legend>
+            <p class="section-description">A different mood. Still your space.</p>
+            <div class="theme-options">
+              <label class="theme-option"><input type="radio" name="theme" value="amethyst" checked><span class="theme-art amethyst-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Amethyst</strong><small>Our signature purple</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
+              <label class="theme-option"><input type="radio" name="theme" value="midnight"><span class="theme-art midnight-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Midnight</strong><small>After-hours energy</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
+              <label class="theme-option"><input type="radio" name="theme" value="discord"><span class="theme-art discord-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Discord default</strong><small>A familiar palette</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
+            </div>
+            <p id="theme-notice" class="setting-note">Applies to this preview. Your choice is saved on this browser.</p>
+          </fieldset>
+          <div class="release-card"><span class="release-icon" aria-hidden="true">↗</span><div><span class="eyebrow">ON THE HORIZON</span><h3>First build · iPhone install pending</h3><p>This is an interactive design preview, not an installable iOS app.</p></div></div>
+          <div class="credits"><svg aria-hidden="true"><use href="#korg-mark"/></svg><div><strong>A little Korg. A lot of Rain.</strong><p>Built on the work of Rain and its contributors.<br>Korg is a working name for an unofficial Discord mod.</p></div></div>
+        </section>
+      </main>
+    </div>
+
+    <nav class="bottom-nav" aria-label="Main navigation">
+      <button type="button" data-page="chats" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#chat-icon"/></svg><span>Chats</span></button>
+      <button type="button" data-page="servers"><svg class="icon" aria-hidden="true"><use href="#server-icon"/></svg><span>Servers</span></button>
+      <button type="button" data-page="korg"><svg class="korg-nav-icon" aria-hidden="true"><use href="#korg-mark"/></svg><span>Korg</span></button>
+    </nav>
+  </div>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+  <noscript><div class="noscript-note">Enable JavaScript to explore sample chats and change themes. This preview never connects to Discord.</div></noscript>
+</body>
+</html>
