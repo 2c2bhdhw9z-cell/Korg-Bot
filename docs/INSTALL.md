@@ -21,9 +21,15 @@ These files are **not an IPA**, the app package iOS installs. Renaming the bundl
 
 Korg uses Rain's existing local settings and theme storage. Trying it in an existing Rain installation shares those settings; it is not an isolated app. Korg presets do not download themes from the network. Existing upstream Rain features can still use their own network services.
 
-## If you do not have Rain installed
+## If you currently have regular Discord
 
-A compatible loader and a Discord installation that you are permitted to modify must be prepared and signed for your device. iPhone signing is separate from building this bundle. The Linux development computer cannot run Xcode or validate an iPhone install.
+The intended installation is a separate app named **Korg**, using app identifier `app.korg.discord`, alongside regular Discord. Korg's customization is bundled inside that app: no hosting account or prior Rain installation is needed. The App Store's installed Discord cannot load this bundle directly.
+
+The repository now prepares a pinned, modified RainTweak loader and has a macOS build workflow, **Build Korg loader**. It produces loader components and their source, not a signed Discord IPA. The packaged loader reads `BunnyResources.bundle/korg.js` on launch and does not download Rain as a default. Its recovery menu's **Reset to Bundled Korg** returns to that packaged version. A custom HTTPS bundle remains an explicit advanced option.
+
+To finish the app, the loader package must be injected into a compatible Discord IPA that you are entitled to supply and modify. The native loader currently retains RainTweak's substrate hook dependency, so the app-packaging step must supply a compatible hook runtime and its license/source notices. No such runtime or proprietary IPA is fetched by this workflow. The resulting app must then be signed for your device through an installation tool you control. Neither this chat nor the repository needs your Discord password or Apple password.
+
+Having regular Discord installed does not provide a reusable IPA or signing approval to the development computer. Those are the remaining external inputs. The Linux development computer cannot run Xcode or validate an iPhone install.
 
 The inspected [RainTweak source](https://codeberg.org/raincord/RainTweak) requires Discord v332 or newer for its runtime hooks. The pinned Rain bundle declares iOS build `110861`; that number is an upstream compatibility target, not a guarantee that other builds work. RainTweak's README also says iOS 27 is unsupported. Check your actual iOS, Discord, and loader versions before installation.
 

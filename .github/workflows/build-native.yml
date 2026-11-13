@@ -1,0 +1,52 @@
+name: Build Korg loader
+
+on:
+  push:
+    branches: [main, 'maipa-g/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: korg-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  loader:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out Korg
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Install build packages
+        run: |
+          npm install --global bun@1.4.3
+          brew install make ldid xz
+          node --version
+          bun --version
+          xcodebuild -version
+
+      - name: Build and verify Korg bundle
+        run: |
+          npm run build
+          npm run verify
+
+      - name: Prepare and compile the native loader
+        run: bash scripts/build-native.sh
+
+      - name: Run regression checks
+        run: npm test
+
+      - name: Upload loader, resources, source, and licenses
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: KorgLoader-0.1.0-components
+          path: artifacts/native/
+          if-no-files-found: error
+          retention-days: 14

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { patchSettings, patchSettingsStore, patchColorPreferences, patchThemes, patchThemesPage, patchThemeInfoSheet, replaceOnce } from "../scripts/patches.mjs";
+import { patchSettings, patchSettingsStore, patchColorPreferences, patchThemes, patchThemesPage, patchThemeInfoSheet, patchUpdater, replaceOnce } from "../scripts/patches.mjs";
 
 const revision = "4b091e1698aa983c5f4e694ae243c9a6fd8b52fb";
 const work = new URL(`../.build/rain-${revision}/`, import.meta.url);
@@ -93,6 +93,7 @@ pinnedTest("all transforms accept only the pinned originals and produce valid TS
         ["src/plugins/_core/painter/themes/index.ts", patchThemes],
         ["src/rain/pages/Themes/index.tsx", patchThemesPage],
         ["src/rain/pages/Themes/sheets/ThemeInfoActionSheet.tsx", patchThemeInfoSheet],
+        ["src/rain/pages/Updater/index.tsx", patchUpdater],
     ]) {
         const patched = patch(upstream(path));
         esbuild.transformSync(patched, { loader: path.endsWith("tsx") ? "tsx" : "ts" });

@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { patchSettings, patchThemes, patchSettingsStore, patchColorPreferences, patchThemesPage, patchThemeInfoSheet, replaceOnce } from "./patches.mjs";
+import { patchSettings, patchThemes, patchSettingsStore, patchColorPreferences, patchThemesPage, patchThemeInfoSheet, patchUpdater, replaceOnce } from "./patches.mjs";
 import { dependencyNotices } from "./licenses.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -58,6 +58,7 @@ const edits = [
     ["src/plugins/_core/painter/themes/preferences.ts", patchColorPreferences],
     ["src/rain/pages/Themes/index.tsx", patchThemesPage],
     ["src/rain/pages/Themes/sheets/ThemeInfoActionSheet.tsx", patchThemeInfoSheet],
+    ["src/rain/pages/Updater/index.tsx", patchUpdater],
     ["scripts/build.mjs", source => replaceOnce(source,
         "    await build({ ...config, ...overrideConfig });",
         '    const result = await build({ ...config, ...overrideConfig, metafile: true });\n    await fs.writeFile("dist/metafile.json", JSON.stringify(result.metafile));',

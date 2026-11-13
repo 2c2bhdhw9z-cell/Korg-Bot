@@ -40,7 +40,9 @@ Build output is ignored by Git. No Discord IPA or signing material is downloaded
 
 ## iPhone installation
 
-See [installation and recovery notes](docs/INSTALL.md). An existing compatible RainTweak installation can load Korg from a custom HTTPS bundle address. The build does not automatically host the bundle, sign an iPhone application, or bypass Discord app encryption. Installing from scratch still requires the loader, a permitted Discord app copy, and device signing.
+See [installation and recovery notes](docs/INSTALL.md). For a phone with regular Discord, the intended result is a separately installed Korg app with the customization embedded. The added native loader prepares that path without requiring a hosting account or a prior Rain installation. A compatible Discord IPA that you can supply and modify, packaging with the loader's hook runtime, and device signing remain necessary. This project does not fetch a proprietary app, bypass its encryption, or collect signing credentials.
+
+An existing compatible RainTweak installation can also load the JavaScript build from a custom HTTPS address.
 
 The native page is integrated with Rain's APIs; its runtime behavior cannot be proven by the browser preview or a successful bundle build. Rain's current compatibility target and the inspected loader revision are recorded in `upstream.json`.
 
@@ -49,3 +51,14 @@ The native page is integrated with Rain's APIs; its runtime behavior cannot be p
 Built on Rain and its contributors. Adapted source and Korg additions are MPL-2.0; the upstream license and exact modified source accompany the generated distribution. See [NOTICE.md](NOTICE.md) for attribution and the upstream package metadata discrepancy. RainTweak remains a separate OSL-3.0 project; its code is not included here.
 
 Korg is unofficial and unaffiliated with Discord, Rain, or KORG Inc. Discord's terms restrict client modifications, which carry account risk. No App Store availability or official support is implied.
+
+
+## Native loader build
+
+After building the JavaScript bundle, `npm run prepare:native` verifies and downloads the pinned RainTweak source, applies the local-bundle changes, and prepares `.build/native/rain-tweak`. This preparation and its patch tests work on Linux. The native code itself requires macOS and full Xcode.
+
+On a Mac with GNU Make (`gmake`), `ldid`, and `xz` installed, run `npm run build:native`. The script checks out a pinned Theos revision and pinned submodules, uses the installed iPhoneOS SDK, compiles the loader, checks the arm64 library and embedded JavaScript checksum, and collects components, corresponding source, and licenses under `artifacts/native/`.
+
+The **Build Korg loader** GitHub Actions workflow runs the same path on `macos-15`. A successful workflow validates compilation and packaging, not iPhone installation or Discord runtime compatibility. Its output is a `.deb`/dylib/resource bundle, **not an installable IPA**. It never downloads Discord, signs a user's app, or publishes a release.
+
+The native loader is adapted from RainTweak under OSL-3.0; see [native notices](native/NOTICE.md). Preserve both the JavaScript and native licenses/source when distributing their components.

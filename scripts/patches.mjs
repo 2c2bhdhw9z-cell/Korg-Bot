@@ -238,3 +238,12 @@ export function patchThemeInfoSheet(source) {
                     />`, `                        onPress={copyThemeUrl}
                     />}`, "close bundled copy URL");
 }
+
+// Packaged Korg updates with its app; Rain's online updater must not offer to
+// replace it with an upstream Rain release. Compatibility notes remain in docs.
+export function patchUpdater(source) {
+    if (source.includes("korgEmbedded")) throw new Error("Upstream changed: embedded updater already patched");
+    const guard = '        if ((globalThis as any).__RAIN_LOADER__?.korgEmbedded) return;\n';
+    source = replaceOnce(source, '    React.useEffect(() => {\n', '    React.useEffect(() => {\n' + guard, "embedded updater guard");
+    return replaceOnce(source, 'export function versionCheck() {\n', 'export function versionCheck() {\n    if ((globalThis as any).__RAIN_LOADER__?.korgEmbedded) return;\n', "embedded version updater guard");
+}
