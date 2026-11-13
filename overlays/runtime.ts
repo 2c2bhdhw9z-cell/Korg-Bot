@@ -37,7 +37,9 @@ export function createTrackedStorage(path: string, io = { fileExists, readFile, 
     let latest: Promise<void> = Promise.resolve();
     return {
         async getItem(_name: string) {
-            await latest;
+            // A prior failed write must settle before reading, but a fresh read
+            // must still be able to recover the saved file.
+            await latest.catch(() => {});
             return await io.fileExists(path) ? await io.readFile(path) : null;
         },
         setItem(_name: string, value: string) {

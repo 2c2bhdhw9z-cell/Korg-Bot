@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { patchSettings, patchThemes, patchSettingsStore, patchColorPreferences, patchThemesPage, patchThemeInfoSheet, patchUpdater, replaceOnce } from "./patches.mjs";
 import { dependencyNotices } from "./licenses.mjs";
+import { patchPluginManager } from "./feature-patches.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const upstream = JSON.parse(await readFile(path.join(root, "upstream.json"), "utf8"));
@@ -52,6 +53,7 @@ for (const item of await readdir(work)) {
 await run("tar", ["-xzf", archivePath, "--strip-components=1", "-C", work]);
 
 const edits = [
+    ["src/plugins/index.ts", patchPluginManager],
     ["src/plugins/_core/settings/index.tsx", patchSettings],
     ["src/plugins/_core/painter/themes/index.ts", patchThemes],
     ["src/api/settings.ts", patchSettingsStore],
@@ -71,6 +73,9 @@ for (const [relative, transform] of edits) {
 await mkdir(path.join(work, "src/rain/pages/Korg"), { recursive: true });
 await cp(path.join(root, "overlays/KorgPage.tsx"), path.join(work, "src/rain/pages/Korg/index.tsx"));
 await cp(path.join(root, "overlays/runtime.ts"), path.join(work, "src/rain/pages/Korg/runtime.ts"));
+for (const name of ["features.ts", "FeaturesPage.tsx"]) {
+    await cp(path.join(root, "overlays", name), path.join(work, "src/rain/pages/Korg", name));
+}
 
 console.log("Installing locked upstream dependencies…");
 await run("bun", ["install", "--frozen-lockfile", "--ignore-scripts"], work);

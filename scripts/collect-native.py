@@ -42,7 +42,7 @@ with tarfile.open(OUT / "korg-loader-source.tar.gz", "w:gz") as archive:
 
 manifest = {
     "name": "KorgLoader",
-    "version": "0.1.0",
+    "version": json.loads((ROOT / "package.json").read_text())["version"],
     "status": "Compiled loader component; not an IPA; physical iPhone runtime unverified",
     "architecture": architecture,
     "xcode": subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),

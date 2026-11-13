@@ -8,6 +8,7 @@
  */
 
 import { findAssetId } from "@api/assets";
+import { flushBeforeReload } from "./features";
 import { getDebugInfo } from "@api/debug";
 import { BundleUpdaterManager } from "@api/native/modules";
 import { useSettings } from "@api/settings";
@@ -31,18 +32,22 @@ import { useRef, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { colorsPersistence, saveSafeMode, settingsPersistence, themeBlockReason, themesPersistence, useKorgRuntime } from "./runtime";
 
-export const KORG_VERSION = "0.1.0";
+export const KORG_VERSION = "0.2.0";
 export const RAIN_REVISION = "4b091e1698aa983c5f4e694ae243c9a6fd8b52fb";
 
 // These IDs are local storage keys, never URLs. Integration MUST return early
-// for these two IDs in Rain's fetchTheme (and hotFetchTheme) before safeFetch.
+// for every korg: ID in Rain's fetchTheme (and hotFetchTheme) before safeFetch.
 // updateThemes runs before this lazily loaded screen can install any guard.
-export const KORG_THEME_IDS = ["korg:amethyst", "korg:midnight"] as const;
+export const KORG_THEME_IDS = ["korg:amethyst", "korg:midnight", "korg:rose", "korg:ocean", "korg:forest", "korg:ember"] as const;
 type KorgThemeId = typeof KORG_THEME_IDS[number];
 
 // Both Discord appearance variants intentionally receive the preset palette.
 // Do not change the user's stored light/dark preference to apply a Korg theme.
-function palette(primary: string, secondary: string, tertiary: string, floating: string): ThemeManifest["semanticColors"] {
+function palette(
+    primary: string, secondary: string, tertiary: string, floating: string,
+    accent = "#8250DF", link = "#C6A5FF",
+    text = "#EAE3F5", subdued = "#C9BEDD", muted = "#B6A9CB",
+): ThemeManifest["semanticColors"] {
     return {
         BACKGROUND_PRIMARY: [primary, primary],
         BACKGROUND_SECONDARY: [secondary, secondary],
@@ -69,21 +74,21 @@ function palette(primary: string, secondary: string, tertiary: string, floating:
         INPUT_BACKGROUND: [tertiary, tertiary],
         MODAL_BACKGROUND: [primary, primary],
         MODAL_FOOTER_BACKGROUND: [secondary, secondary],
-        TEXT_PRIMARY: ["#EAE3F5", "#EAE3F5"],
-        TEXT_SECONDARY: ["#C9BEDD", "#C9BEDD"],
-        ICON_PRIMARY: ["#EAE3F5", "#EAE3F5"],
-        ICON_SECONDARY: ["#C9BEDD", "#C9BEDD"],
-        HEADER_PRIMARY: ["#F5F0FF", "#F5F0FF"],
-        HEADER_SECONDARY: ["#C9BEDD", "#C9BEDD"],
-        TEXT_NORMAL: ["#EAE3F5", "#EAE3F5"],
-        TEXT_MUTED: ["#B6A9CB", "#B6A9CB"],
-        TEXT_LINK: ["#C6A5FF", "#C6A5FF"],
-        INTERACTIVE_NORMAL: ["#D4C7E8", "#D4C7E8"],
-        INTERACTIVE_HOVER: ["#F5F0FF", "#F5F0FF"],
+        TEXT_PRIMARY: [text, text],
+        TEXT_SECONDARY: [subdued, subdued],
+        ICON_PRIMARY: [text, text],
+        ICON_SECONDARY: [subdued, subdued],
+        HEADER_PRIMARY: [text, text],
+        HEADER_SECONDARY: [subdued, subdued],
+        TEXT_NORMAL: [text, text],
+        TEXT_MUTED: [muted, muted],
+        TEXT_LINK: [link, link],
+        INTERACTIVE_NORMAL: [subdued, subdued],
+        INTERACTIVE_HOVER: [text, text],
         INTERACTIVE_ACTIVE: ["#FFFFFF", "#FFFFFF"],
-        INTERACTIVE_MUTED: ["#786B8D", "#786B8D"],
-        CHANNELS_DEFAULT: ["#B6A9CB", "#B6A9CB"],
-        BRAND_500: ["#8250DF", "#8250DF"],
+        INTERACTIVE_MUTED: [muted, muted],
+        CHANNELS_DEFAULT: [muted, muted],
+        BRAND_500: [accent, accent],
     };
 }
 
@@ -114,6 +119,58 @@ export const KORG_THEMES: Record<KorgThemeId, ThemeManifest> = {
             BRAND_600: "#673BB5",
         },
     },
+    "korg:rose": {
+        spec: 2,
+        name: "Korg Rose",
+        description: "Deep plum surfaces with a soft rose accent. Bundled with Korg; works offline.",
+        authors: [{ name: "Korg" }],
+        semanticColors: palette("#251B24", "#1E171E", "#171118", "#322431", "#A84F75", "#F4A9CB", "#F8EDF3", "#DEC9D5", "#BBA5B1"),
+        rawColors: {
+            BRAND_360: "#E998B8",
+            BRAND_500: "#A84F75",
+            BRAND_560: "#944262",
+            BRAND_600: "#813653",
+        },
+    },
+    "korg:ocean": {
+        spec: 2,
+        name: "Korg Ocean",
+        description: "Deep teal surfaces with a clear blue accent. Bundled with Korg; works offline.",
+        authors: [{ name: "Korg" }],
+        semanticColors: palette("#14252A", "#112025", "#0C191E", "#20343A", "#288BA4", "#8ED9E9", "#ECF6F7", "#C0D9DD", "#A0BCC1"),
+        rawColors: {
+            BRAND_360: "#74C8DA",
+            BRAND_500: "#288BA4",
+            BRAND_560: "#227A92",
+            BRAND_600: "#1C697E",
+        },
+    },
+    "korg:forest": {
+        spec: 2,
+        name: "Korg Forest",
+        description: "Evergreen surfaces with a fresh leaf accent. Bundled with Korg; works offline.",
+        authors: [{ name: "Korg" }],
+        semanticColors: palette("#1A2722", "#16211C", "#101A16", "#29382F", "#548F68", "#A9DFBA", "#EFF6EF", "#C9DACA", "#A7BDAA"),
+        rawColors: {
+            BRAND_360: "#91CFA5",
+            BRAND_500: "#548F68",
+            BRAND_560: "#477E5B",
+            BRAND_600: "#3B6D4E",
+        },
+    },
+    "korg:ember": {
+        spec: 2,
+        name: "Korg Ember",
+        description: "Charcoal surfaces with a warm copper accent. Bundled with Korg; works offline.",
+        authors: [{ name: "Korg" }],
+        semanticColors: palette("#27211F", "#201A19", "#191413", "#362C28", "#B66F46", "#F3BA91", "#F8F0EA", "#DFCABE", "#BEA99D"),
+        rawColors: {
+            BRAND_360: "#E5A075",
+            BRAND_500: "#B66F46",
+            BRAND_560: "#A05E38",
+            BRAND_600: "#8B4F2F",
+        },
+    },
 };
 
 function showMessage(title: string, content: string) {
@@ -134,7 +191,14 @@ function requestReload(content: string) {
             <AlertActionButton
                 text="Reload"
                 variant="primary"
-                onPress={() => BundleUpdaterManager.reload()}
+                onPress={async () => {
+                    try {
+                        await flushBeforeReload();
+                        BundleUpdaterManager.reload();
+                    } catch (error) {
+                        showMessage("Reload paused", error instanceof Error ? error.message : "Wait for changes to finish saving.");
+                    }
+                }}
             />
             <AlertActionButton text="Later" variant="secondary" />
         </AlertActions>}
@@ -249,13 +313,17 @@ export default function KorgPage() {
         }
     }
 
-    async function openPage(page: "Plugins" | "Themes") {
+    async function openPage(page: "Features" | "Plugins" | "Themes" | "Fonts") {
         try {
-            const { default: Page } = page === "Plugins"
-                ? await import("@rain/pages/Plugins")
-                : await import("@rain/pages/Themes");
+            const { default: Page } = page === "Features"
+                ? await import("@rain/pages/Korg/FeaturesPage")
+                : page === "Plugins"
+                    ? await import("@rain/pages/Plugins")
+                    : page === "Themes"
+                        ? await import("@rain/pages/Themes")
+                        : await import("@rain/pages/Fonts");
             navigation.push("RAIN_CUSTOM_PAGE", {
-                title: page,
+                title: page === "Features" ? "Bundled features" : page,
                 render: () => <Page />,
             });
         } catch {
@@ -281,7 +349,7 @@ export default function KorgPage() {
                         Your Discord, a little more you.
                     </Text>
                     <Text variant="text-sm/normal" style={{ color: "#D4C7E8" }}>
-                        Purple themes and useful controls, built on Rain.
+                        Bundled themes and useful controls, built on Rain.
                         Your chats, calls and sign-in stay in Discord.
                     </Text>
                 </View>
@@ -302,6 +370,38 @@ export default function KorgPage() {
                         trailing={<TableRow.TrailingText text={activeTheme?.id === "korg:midnight" ? "Selected" : "Apply"} />}
                         disabled={themeActionsBlocked}
                         onPress={() => void changeTheme("korg:midnight")}
+                    />
+                    <TableRow
+                        label="Rose"
+                        subLabel="Soft rose on deep plum · bundled"
+                        icon={<Swatch color="#A84F75" />}
+                        trailing={<TableRow.TrailingText text={activeTheme?.id === "korg:rose" ? "Selected" : "Apply"} />}
+                        disabled={themeActionsBlocked}
+                        onPress={() => void changeTheme("korg:rose")}
+                    />
+                    <TableRow
+                        label="Ocean"
+                        subLabel="Clear blue on deep teal · bundled"
+                        icon={<Swatch color="#288BA4" />}
+                        trailing={<TableRow.TrailingText text={activeTheme?.id === "korg:ocean" ? "Selected" : "Apply"} />}
+                        disabled={themeActionsBlocked}
+                        onPress={() => void changeTheme("korg:ocean")}
+                    />
+                    <TableRow
+                        label="Forest"
+                        subLabel="Fresh green on evergreen · bundled"
+                        icon={<Swatch color="#548F68" />}
+                        trailing={<TableRow.TrailingText text={activeTheme?.id === "korg:forest" ? "Selected" : "Apply"} />}
+                        disabled={themeActionsBlocked}
+                        onPress={() => void changeTheme("korg:forest")}
+                    />
+                    <TableRow
+                        label="Ember"
+                        subLabel="Warm copper on charcoal · bundled"
+                        icon={<Swatch color="#B66F46" />}
+                        trailing={<TableRow.TrailingText text={activeTheme?.id === "korg:ember" ? "Selected" : "Apply"} />}
+                        disabled={themeActionsBlocked}
+                        onPress={() => void changeTheme("korg:ember")}
                     />
                     <TableRow
                         label="Use Discord default"
@@ -325,7 +425,14 @@ export default function KorgPage() {
                 <TableRowGroup title="Your setup">
                     <TableRow
                         arrow
-                        label="Plugins"
+                        label="Bundled features"
+                        subLabel="Built-in features and one-tap packs. No plugin links needed."
+                        icon={<TableRow.Icon source={findAssetId("PuzzlePieceIcon")} />}
+                        onPress={() => void openPage("Features")}
+                    />
+                    <TableRow
+                        arrow
+                        label="Advanced plugin manager"
                         subLabel="Manage Rain's installed plugins"
                         icon={<TableRow.Icon source={findAssetId("PuzzlePieceIcon")} />}
                         onPress={() => void openPage("Plugins")}
@@ -336,6 +443,12 @@ export default function KorgPage() {
                         subLabel="Manage all themes and appearance options"
                         icon={<TableRow.Icon source={findAssetId("PaintPaletteIcon")} />}
                         onPress={() => void openPage("Themes")}
+                    />
+                    <TableRow
+                        arrow
+                        label="Fonts"
+                        subLabel="Manage imported fonts; fonts are not bundled"
+                        onPress={() => void openPage("Fonts")}
                     />
                 </TableRowGroup>
 

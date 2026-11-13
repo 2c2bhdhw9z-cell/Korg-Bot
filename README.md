@@ -62,3 +62,13 @@ On a Mac with GNU Make (`gmake`), `ldid`, and `xz` installed, run `npm run build
 The **Build Korg loader** GitHub Actions workflow runs the same path on `macos-15`. A successful workflow validates compilation and packaging, not iPhone installation or Discord runtime compatibility. Its output is a `.deb`/dylib/resource bundle, **not an installable IPA**. It never downloads Discord, signs a user's app, or publishes a release.
 
 The native loader is adapted from RainTweak under OSL-3.0; see [native notices](native/NOTICE.md). Preserve both the JavaScript and native licenses/source when distributing their components.
+
+## Bundled customization in 0.2
+
+Korg now exposes Rain's bundled plugin manifests in a searchable **Bundled features** library, grouped by purpose. It shows unavailable platform/capability combinations instead of attempting to enable them. This is a library of Rain plugins already compiled into Korg, not an installer for arbitrary Kettu plugins.
+
+Three optional one-tap packs add compatible features without disabling existing choices: **Essentials**, **Personal touches**, and **Media tools**. Individual feature choices are saved and applied after reload. Features involving message retention, external services, or removal of confirmations show an explanation before enabling. No pack is silently applied to an existing installation.
+
+Six offline palettes are included: **Amethyst, Midnight, Rose, Ocean, Forest, and Ember**, plus restoration of Discord's default. Fonts has a shortcut to Rain's importer; no font files are claimed to be bundled. The design preview includes representative feature selections stored only in the browser, explicitly separate from the native app.
+
+Plugin preferences use tracked writes and rollback; optional plugins wait for readable settings, while core recovery stays available. Startup completion cannot overwrite a preference saved for the next reload. Native/iOS 27 runtime compatibility still requires device testing; successful compilation is not proof that every bundled plugin works on that OS.

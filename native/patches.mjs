@@ -18,7 +18,7 @@ export function patchControl(source) {
     return edits(source, [
         ["Package: dev.raincord.tweak", "Package: app.korg.loader", "package id"],
         ["Name: RainTweak", "Name: KorgLoader", "package name"],
-        ["Version: 1.2.0", "Version: 0.1.0", "package version"],
+        ["Version: 1.2.0", "Version: 0.2.0", "package version"],
         ["Description: A tweak to inject Rain into Discord", "Description: Bundled Korg for Discord, based on RainTweak", "package description"],
         ["Icon: <https://codeberg.org/raincord/rain/raw/branch/main/src/assets/rain.png>\n", "", "old package icon"],
     ]);

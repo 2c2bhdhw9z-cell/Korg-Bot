@@ -6,9 +6,31 @@
   const input = $("#message-input");
   const sendButton = $(".send-button");
   const conversation = $("#conversation");
-  const themeNames = { amethyst: "Amethyst", midnight: "Midnight", discord: "Discord default" };
-  const themeColors = { amethyst: "#140F20", midnight: "#07060B", discord: "#1e1f22" };
+  const themeNames = { amethyst: "Amethyst", midnight: "Midnight", rose: "Rose", ocean: "Ocean", forest: "Forest", ember: "Ember", discord: "Discord default" };
+  const themeColors = { amethyst: "#140F20", midnight: "#07060B", rose: "#21131c", ocean: "#10232b", forest: "#14251c", ember: "#281b18", discord: "#1e1f22" };
   const storageKey = "korg.preview.theme.v1";
+  const featureStorageKey = "korg.preview.features.v1";
+  const features = [
+    { id: "JumpToTop", label: "Jump to top", category: "Navigation", description: "A shortcut for returning to the top of a conversation." },
+    { id: "PictureLinks", label: "Picture links", category: "Media", description: "A Rain plugin for picture links." },
+    { id: "ShowImageLinks", label: "Show image links", category: "Media", description: "A Rain plugin for showing image links." },
+    { id: "UnlimitedZoom", label: "Unlimited zoom", category: "Media", description: "A Rain plugin for image zoom controls." },
+    { id: "PermissionViewer", label: "Permission viewer", category: "Navigation", description: "A Rain plugin for viewing permissions." },
+    { id: "Pastelize", label: "Pastelize", category: "Appearance", description: "A Rain plugin for pastel colors." },
+    { id: "BetterYouBar", label: "Better You bar", category: "Appearance", description: "A Rain plugin for the You bar." },
+    { id: "ChatboxAvatar", label: "Chatbox avatar", category: "Appearance", description: "A Rain plugin for the chat box avatar." },
+    { id: "PlatformIndicators", label: "Platform indicators", category: "Appearance", description: "A Rain plugin for platform indicators." },
+    { id: "ExpressionUtils", label: "Expression utilities", category: "Expression", description: "A Rain plugin for expression tools." },
+    { id: "FavouriteAnything", label: "Favourite anything", category: "Expression", description: "A Rain plugin for favorites." },
+    { id: "FileSizeOnPicker", label: "File size on picker", category: "Media", description: "A Rain plugin for file sizes in the picker." },
+    { id: "SilentTyping", label: "Silent typing", category: "Privacy", description: "A Rain plugin for typing privacy." },
+    { id: "AnonymizeFileNames", label: "Anonymize file names", category: "Privacy", description: "A Rain plugin for file name privacy." },
+    { id: "HideCallButtons", label: "Hide call buttons", category: "Appearance", description: "A Rain plugin for call button visibility." },
+    { id: "TextReplace", label: "Text replace", category: "Expression", description: "A Rain plugin for text replacement." },
+  ];
+  const categories = ["Navigation", "Media", "Appearance", "Expression", "Privacy"];
+  const packs = { essentials: features.slice(0, 5), personal: features.slice(5, 9), media: features.slice(9, 12) };
+  const selectedFeatures = new Set();
   const people = {
     mia: { name: "Mia", initials: "mi", color: "lilac" },
     leo: { name: "Leo", initials: "lo", color: "peach" },
@@ -105,15 +127,16 @@
 
   function showPage(page, focus = true) {
     app.dataset.view = page;
-    $("#chat-page").hidden = page === "korg";
+    $("#chat-page").hidden = page === "korg" || page === "features";
     $("#korg-page").hidden = page !== "korg";
+    $("#features-page").hidden = page !== "features";
     if (page === "chats") resizeInput();
     document.querySelectorAll("[data-page]").forEach((button) => {
-      if (button.dataset.page === page) button.setAttribute("aria-current", "page");
+      if (button.dataset.page === page || (page === "features" && button.dataset.page === "korg")) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
     if (focus) {
-      const target = page === "korg" ? "#korg-title" : page === "servers" ? "#server-name" : "#chat-title";
+      const target = page === "features" ? "#features-title" : page === "korg" ? "#korg-title" : page === "servers" ? "#server-name" : "#chat-title";
       $(target).focus({ preventScroll: true });
     }
   }
@@ -228,6 +251,80 @@
       announce(notice);
     }
   }
+
+  function saveFeatures() {
+    try {
+      localStorage.setItem(featureStorageKey, JSON.stringify([...selectedFeatures]));
+      $("#feature-storage-note").textContent = "Selections saved in this browser.";
+    } catch {
+      $("#feature-storage-note").textContent = "Selections last for this visit only. Browser storage is unavailable.";
+    }
+  }
+
+  function renderFeatures() {
+    const query = $("#feature-search").value.trim().toLocaleLowerCase();
+    const container = $("#feature-categories");
+    container.replaceChildren();
+    let matches = 0;
+    categories.forEach((category) => {
+      const items = features.filter((feature) => feature.category === category &&
+        `${feature.label} ${feature.id} ${feature.description} ${category}`.toLocaleLowerCase().includes(query));
+      if (!items.length) return;
+      matches += items.length;
+      const section = element("section", "feature-group");
+      section.append(element("h3", "features-subtitle", category));
+      const list = element("div", "feature-list");
+      items.forEach((feature) => {
+        const label = element("label", "feature-card");
+        const copy = element("span", "feature-copy");
+        copy.append(element("strong", "", feature.label), element("small", "", `Rain plugin · ${feature.id}`), element("span", "", feature.description));
+        const toggle = element("input");
+        toggle.type = "checkbox";
+        toggle.value = feature.id;
+        toggle.checked = selectedFeatures.has(feature.id);
+        toggle.setAttribute("aria-label", `${feature.label} preview selection`);
+        toggle.addEventListener("change", () => {
+          if (toggle.checked) selectedFeatures.add(feature.id);
+          else selectedFeatures.delete(feature.id);
+          saveFeatures();
+          announce(`${feature.label} ${toggle.checked ? "selected" : "unselected"} for preview only. Does not change Discord.`);
+        });
+        label.append(copy, toggle);
+        list.append(label);
+      });
+      section.append(list);
+      container.append(section);
+    });
+    if (!matches) container.append(element("p", "features-empty", "No matching features."));
+    $("#feature-count").textContent = `${matches} of ${features.length} features shown`;
+  }
+
+  try {
+    const rawFeatures = localStorage.getItem(featureStorageKey);
+    if (rawFeatures !== null) {
+      let savedFeatures;
+      try { savedFeatures = JSON.parse(rawFeatures); } catch { savedFeatures = null; }
+      if (Array.isArray(savedFeatures)) {
+        savedFeatures.forEach((id) => {
+          if (features.some((feature) => feature.id === id)) selectedFeatures.add(id);
+        });
+      }
+    }
+  } catch {
+    $("#feature-storage-note").textContent = "Selections last for this visit only. Browser storage is unavailable.";
+  }
+  renderFeatures();
+  $("#feature-search").addEventListener("input", renderFeatures);
+  document.querySelectorAll("[data-pack]").forEach((button) => {
+    button.addEventListener("click", () => {
+      packs[button.dataset.pack].forEach((feature) => selectedFeatures.add(feature.id));
+      saveFeatures();
+      renderFeatures();
+      announce(`${button.querySelector("strong").textContent} selected for preview only. Does not change Discord.`);
+    });
+  });
+  $("#features-open").addEventListener("click", () => showPage("features"));
+  $("#features-back").addEventListener("click", () => showPage("korg"));
 
   try {
     const saved = localStorage.getItem(storageKey);

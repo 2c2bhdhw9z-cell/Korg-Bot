@@ -87,12 +87,34 @@
             <div class="theme-options">
               <label class="theme-option"><input type="radio" name="theme" value="amethyst" checked><span class="theme-art amethyst-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Amethyst</strong><small>Our signature purple</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
               <label class="theme-option"><input type="radio" name="theme" value="midnight"><span class="theme-art midnight-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Midnight</strong><small>After-hours energy</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
+              <label class="theme-option"><input type="radio" name="theme" value="rose"><span class="theme-art rose-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Rose</strong><small>Soft pink accents</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
+              <label class="theme-option"><input type="radio" name="theme" value="ocean"><span class="theme-art ocean-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Ocean</strong><small>Cool coastal blue</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
+              <label class="theme-option"><input type="radio" name="theme" value="forest"><span class="theme-art forest-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Forest</strong><small>Deep green tones</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
+              <label class="theme-option"><input type="radio" name="theme" value="ember"><span class="theme-art ember-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Ember</strong><small>Warm copper glow</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
               <label class="theme-option"><input type="radio" name="theme" value="discord"><span class="theme-art discord-art" aria-hidden="true"><span></span><i></i><b></b></span><span class="theme-info"><span><strong>Discord default</strong><small>A familiar palette</small></span><span class="radio-mark" aria-hidden="true"></span></span></label>
             </div>
             <p id="theme-notice" class="setting-note">Applies to this preview. Your choice is saved on this browser.</p>
           </fieldset>
+          <button id="features-open" class="features-entry" type="button" aria-controls="features-page">
+            <span><strong>Bundled features</strong><small>Explore Rain plugin choices and starter packs</small></span><svg class="icon" aria-hidden="true"><use href="#chevron-icon"/></svg>
+          </button>
           <div class="release-card"><span class="release-icon" aria-hidden="true">↗</span><div><span class="eyebrow">ON THE HORIZON</span><h3>First build · iPhone install pending</h3><p>This is an interactive design preview, not an installable iOS app.</p></div></div>
           <div class="credits"><svg aria-hidden="true"><use href="#korg-mark"/></svg><div><strong>A little Korg. A lot of Rain.</strong><p>Built on the work of Rain and its contributors.<br>Korg is a working name for an unofficial Discord mod.</p></div></div>
+        </section>
+
+        <section id="features-page" class="features-page" aria-labelledby="features-title" hidden>
+          <button id="features-back" class="features-back" type="button"><span aria-hidden="true">←</span> Korg settings</button>
+          <header class="features-header"><span class="eyebrow">KORG · DESIGN PREVIEW</span><h2 id="features-title" tabindex="-1">Bundled features</h2><p>Browse example Rain plugins and choose what you might use.</p></header>
+          <p id="features-disclaimer" class="features-disclaimer">Preview selections only; does not change Discord.</p>
+          <h3 class="features-subtitle">Starter packs</h3>
+          <div class="pack-list">
+            <button class="pack-button" type="button" data-pack="essentials"><strong>Essentials</strong><span>Navigation, links, zoom and permissions</span></button>
+            <button class="pack-button" type="button" data-pack="personal"><strong>Personal touches</strong><span>Colors, your avatar and profile controls</span></button>
+            <button class="pack-button" type="button" data-pack="media"><strong>Media tools</strong><span>Expression tools, favorites and file sizes</span></button>
+          </div>
+          <div class="features-toolbar"><label for="feature-search">Search features</label><input id="feature-search" type="search" placeholder="Search names or descriptions" autocomplete="off"><span id="feature-count" role="status" aria-live="polite"></span></div>
+          <div id="feature-categories" class="feature-categories"></div>
+          <p id="feature-storage-note" class="setting-note">Selections are saved in this browser when storage is available.</p>
         </section>
       </main>
     </div>

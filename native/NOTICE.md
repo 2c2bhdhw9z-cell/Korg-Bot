@@ -15,7 +15,7 @@ package invocation, independently of Resources cleanup; the runtime evaluates pa
 than downloading Rain; explicitly enabled HTTPS custom bundles retain the
 existing rain/bundle.js cache behavior; reset restores the packaged default;
 recovery UI no longer offers remote Rain versions; the package is KorgLoader
-0.1.0 (`app.korg.loader`). The RainTweak tweak/module name and Rain bridge
+0.2.0 (`app.korg.loader`). The RainTweak tweak/module name and Rain bridge
 protocol remain unchanged for compatibility. `korgEmbedded` metadata signals
 to the JS layer that Korg is local. The original Discord filter is retained,
 with `app.korg.discord` added for a separately identified app.

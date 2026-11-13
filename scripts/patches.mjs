@@ -16,7 +16,7 @@ export function patchSettings(source) {
                 title: () => "Korg",
                 icon: findAssetId("PaintPaletteIcon"),
                 render: () => import("@rain/pages/Korg"),
-                useTrailing: () => "0.1.0",
+                useTrailing: () => "0.2.0",
             },
 `, "settings items");
     return replaceOnce(source, "title: () => Strings.RAIN,", 'title: () => "Rain · advanced",', "upstream settings label");
@@ -129,7 +129,7 @@ export function patchThemes(source) {
                 }
             },`;
         source = replaceOnce(source, before, `            ${method}: async (url: string, selected = false) => {
-                if (url === "korg:amethyst" || url === "korg:midnight") return;
+                if (["korg:amethyst", "korg:midnight", "korg:rose", "korg:ocean", "korg:forest", "korg:ember"].includes(url)) return;
                 assertThemeReady(useSettings.getState().safeMode);
                 const existed = Boolean(get().themes[url]);
                 const generation = themeGenerations.get(url) ?? 0;
@@ -224,7 +224,7 @@ export function patchThemesPage(source) {
 
 export function patchThemeInfoSheet(source) {
     source = replaceOnce(source, '    const [loading, setLoading] = useState(false);', `    const [loading, setLoading] = useState(false);
-    const bundled = themeState.id === "korg:amethyst" || themeState.id === "korg:midnight";`, "bundled theme actions");
+    const bundled = ["korg:amethyst", "korg:midnight", "korg:rose", "korg:ocean", "korg:forest", "korg:ember"].includes(themeState.id);`, "bundled theme actions");
     source = replaceOnce(source, `                    <ThemeInfoIconButton
                         label={Strings.REFETCH}`, `                    {!bundled && <ThemeInfoIconButton
                         label={Strings.REFETCH}`, "hide bundled refetch");
