@@ -2,7 +2,7 @@
 
 The independently authored loader and runtime source now exist in the staged tree. A physical iPhone run of the rewrite has not been verified. The browser preview is not an app, and a JavaScript bundle or native component ZIP cannot be installed by renaming it to `.ipa`.
 
-The user-supplied input is **Discord 353.0, build 122208**, arm64, with an unencrypted main executable (`cryptid=0`) and no injected tweak found in prior static inspection. It remains the input for later packaging. These instructions do not announce a newly built Discord 353 Korg IPA. The earlier Discord 352 Korg 0.2 package contains the historical Rain-derived stack and is not this rewrite.
+The user-supplied input is **Discord 353.0, build 122208**, arm64, with an unencrypted main executable (`cryptid=0`) and no injected tweak found in prior static inspection. It was packaged with the verified original loader into `Korg-0.2-original-Discord-353-unsigned.ipa`. The source file is unchanged; the output is unsigned and needs your own signer. The earlier Discord 352 Korg 0.2 package contains the historical Rain-derived stack and is not this rewrite.
 
 ## Explore locally
 

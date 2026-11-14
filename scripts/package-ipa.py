@@ -283,9 +283,15 @@ def package(ipa, loader_zip, output, expected_loader_sha256=None):
     if expected_loader_sha256 is not None:
         require(artifact_sha == expected_loader_sha256, 'Native archive does not match trusted build digest')
     entries = read_zip(ipa)
-    roots = {name.split('/')[1] for name in entries if name.startswith('Payload/') and len(name.split('/')) > 1}
-    require(len(roots) == 1 and next(iter(roots)).endswith('.app'), 'Expected a single Payload app')
+    roots = {name.split('/')[1] for name in entries
+             if name.startswith('Payload/') and len(name.split('/')) > 2 and name.split('/')[1].endswith('.app')}
+    require(len(roots) == 1, 'Expected a single Payload app')
     app = 'Payload/' + next(iter(roots))
+    discarded_sidecars = sorted(name for name in entries
+                                if name != 'Payload' and not name.startswith(app + '/') and name != app)
+    for name in discarded_sidecars:
+        require(not is_macho(entries[name][1]), 'Unexpected executable outside the main app')
+        del entries[name]
     info_name = app + '/Info.plist'
     require(info_name in entries, 'Missing app Info.plist')
     info = plistlib.loads(entries[info_name][1])
@@ -345,7 +351,7 @@ def package(ipa, loader_zip, output, expected_loader_sha256=None):
     with ipa.open('rb') as handle:
         input_sha = hashlib.file_digest(handle, 'sha256').hexdigest()
     report = dict(inputSha256=input_sha, nativeArchiveSha256=artifact_sha, nativeManifest=manifest,
-                  removed=removed, modifiedOrAdded=sorted(changed - set(removed)), libraryCommands=libraries,
+                  removed=removed, discardedSidecars=discarded_sidecars, modifiedOrAdded=sorted(changed - set(removed)), libraryCommands=libraries,
                   preservedBundleIdentifier=info.get('CFBundleIdentifier'),
                   preservedDiscordVersion=info.get('CFBundleShortVersionString'),
                   thirdPartyPluginsBundled=False, runtimeDependenciesBundled=[],

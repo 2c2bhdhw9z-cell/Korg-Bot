@@ -136,6 +136,13 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(report['outputSha256'], pkg.sha(self.output.read_bytes()))
         self.assertEqual(json.loads(self.output.with_suffix('.inspection.json').read_text()), report)
 
+    def test_non_executable_download_sidecar_is_excluded(self):
+        self.files['Payload/decrypt.day'] = b'download origin metadata'
+        write_zip(self.ipa, self.files)
+        report = pkg.package(self.ipa, self.loader, self.output, pkg.sha(self.loader.read_bytes()))
+        self.assertNotIn('Payload/decrypt.day', pkg.read_zip(self.output))
+        self.assertEqual(report['discardedSidecars'], ['Payload/decrypt.day'])
+
     def test_previous_known_mod_loads_and_resources_are_removed(self):
         self.files[self.app + 'Discord'] = macho([
             library('@executable_path/VoiceMenu.dylib', 0x80000018),
