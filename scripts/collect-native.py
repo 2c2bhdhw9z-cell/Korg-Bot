@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "artifacts/native"
 LIBRARY = ROOT / ".build/native/KorgLoader.dylib"
 DIST = ROOT / "dist"
-ALLOW = {"/System/Library/Frameworks/Foundation.framework/Foundation", "/System/Library/Frameworks/UIKit.framework/UIKit", "/usr/lib/libc++.1.dylib", "/usr/lib/libobjc.A.dylib", "/usr/lib/libSystem.B.dylib"}
+ALLOW = {"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", "/System/Library/Frameworks/Foundation.framework/Foundation", "/System/Library/Frameworks/UIKit.framework/UIKit", "/usr/lib/libc++.1.dylib", "/usr/lib/libobjc.A.dylib", "/usr/lib/libSystem.B.dylib"}
 RUNTIME = ["core.js", "metro.js", "patcher.js", "storage.js", "compat.js", "themes.js", "plugins.js", "ui.js", "start.js"]
 SOURCES = ["native/KorgLoader.mm", "native/ABI.md", "scripts/build.mjs", "scripts/verify.mjs", "scripts/build-native.sh", "scripts/collect-native.py", ".github/workflows/build-native.yml", "tests/native.test.mjs", "package.json", "LICENSE", "NOTICE.md", "docs/API.md", "docs/AUDIT.md", "scripts/package-ipa.py", "tests/runtime.test.mjs", "tests/plugins.test.mjs", "tests/test_package_ipa.py"] + [f"runtime/{name}" for name in RUNTIME]
 
