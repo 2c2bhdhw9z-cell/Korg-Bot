@@ -48,7 +48,7 @@ The JS runtime supplies persistence using host AsyncStorage when available, plug
 
 Output: `artifacts/native/KorgLoader.dylib`, `KorgResources.bundle/` (JS and build manifest), `manifest.json`, `korg-source.tar.gz`, and this API/ABI document. The collector packages the source and license metadata separately; it does not embed third-party plugin code.
 
-Tests exercise the independently authored ABI carrier against a synthetic runtime (including owned-result cleanup), compile its arm64 call site to check x8 when Clang is available, and exercise collection with controlled tool outputs and tampered inputs. A macOS CI build additionally validates a real Mach-O, code signature, and system dependency graph. Synthetic tests are not proof of the host ABI. Release validation still needs a supplied Discord 352 binary and physical-device startup, reload, missing-resource, syntax-error, and persistence checks.
+Tests exercise the independently authored call carrier against a synthetic runtime. The Mac build compiles the real arm64 Mach-O and checks system dependencies and artifact checksums. These checks are not proof of the host ABI. Static callback metadata is verified in the supplied Discord 353 binary; physical-device startup, reload, missing-resource, syntax-error and persistence checks remain necessary.
 
 ## Permission for these original files
 

@@ -38,7 +38,19 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_*.py'
 
       - name: Compile and collect native loader
-        run: bash scripts/build-native.sh
+        run: |
+          mkdir -p .build/native
+          set -o pipefail
+          bash scripts/build-native.sh 2>&1 | tee .build/native/native-build.log
+
+      - name: Upload native diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-native-diagnostics
+          path: .build/native/native-build.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Verify collected artifact
         run: |
