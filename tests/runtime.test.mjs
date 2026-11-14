@@ -372,7 +372,11 @@ function hostFixture() {
         useEffect(callback) { const cleanup = callback(); if (cleanup) effects.push(cleanup); },
     };
     const Native = Object.fromEntries(["View", "Text", "Switch", "Modal", "SafeAreaView", "ScrollView", "TextInput", "Pressable"].map(name => [name, ({ native: name })]));
-    Native.AppRegistry = { registerComponent(name, provider) { registrations.set(name, provider); return name; } };
+    const appProviders = new Map();
+    Native.AppRegistry = {
+        registerComponent(name, provider) { registrations.set(name, provider); appProviders.set(name, provider); return name; },
+        runApplication(name, props) { const Root = appProviders.get(name)(); return React.createElement(Root, props); },
+    };
     function require(id) { return records.get(id)?.publicModule.exports; }
     require.getModules = () => records;
     function define(factory, id) {
@@ -420,17 +424,16 @@ test("full runtime loads a real URL plugin, uses its persisted settings, patches
     host.publish(context, 3, { ...host.Native, AppRegistry: host.Native.AppRegistry });
     const rootRegistration = host.Native.AppRegistry.registerComponent("Root", () => function Root() {});
     assert.equal(rootRegistration, "Root");
-    const registeredProvider = host.registrations.get("Root");
-    assert.equal(typeof registeredProvider, "function");
-    const RegisteredRoot = registeredProvider();
-    assert.equal(RegisteredRoot.name, "KorgOverlay");
-    const overlayElement = RegisteredRoot({});
-    assert.equal(overlayElement.type.name, "Overlay");
-    assert.equal(overlayElement.type(overlayElement.props).type, host.Native.View);
+    const overlayElement = host.Native.AppRegistry.runApplication("Root", {});
+    assert.equal(overlayElement.type.name, "KorgOverlay");
+    const renderedRoot = overlayElement.type(overlayElement.props);
+    assert.equal(renderedRoot.type.name, "Overlay");
+    assert.equal(K.ui.status().rootWrapped, true);
+    assert.equal(renderedRoot.type(renderedRoot.props).type, host.Native.View);
     assert.equal(context.window.vendetta.ui.components.View, host.Native.View);
     assert.equal(host.registrations.size, 1);
     K.ui.openSettings();
-    RegisteredRoot({});
+    host.Native.AppRegistry.runApplication("Root", {});
     assert.ok(host.renders > 0);
     const installed = await K.plugins.install("https://plugins.test/real.js", { kind: "bundle" });
     assert.equal(installed.enabled, false);
