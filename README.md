@@ -1,80 +1,62 @@
 # Korg for iOS
 
-An experimental Discord customization built on [Rain](https://github.com/ra1ncord/rain), in the same family of mobile modifications as Rain and Kettu. **Korg** is the working name.
+Korg is an independently authored, experimental runtime and native loader for a supplied Discord iOS app. The current staged tree contains the replacement source and build scripts. It is no longer a Rain build or a collection of bundled Rain plugins. **A working Discord 353 installation has not yet been demonstrated on a physical iPhone.**
 
-The first version adds a Korg settings section, bundled Amethyst and Midnight themes, restore-default and undo controls, shortcuts to Rain's plugin/theme managers, and safe-mode/reload controls. Discord itself continues to handle chats, calls, and sign-in.
+The supplied IPA is Discord **353.0, build 122208**, arm64, with `cryptid=0` and no injected tweak found during prior static inspection. That input is available for later packaging; this README does not announce a newly built or signed Korg IPA. The older Discord 352 Korg 0.2 artifact is the historical Rain-derived build, not this rewrite.
 
-**Status:** source and build pipeline for a Rain-compatible bundle, plus an interactive design preview. This is not a standalone iOS app or a ready-to-install IPA. Actual iPhone compatibility must be tested with a compatible Discord/RainTweak installation. The preview uses fictional, local chats and never connects to Discord.
+## What is here
 
-## Open the design preview
+- Nine original core modules: state/logging, Metro discovery, scoped patching, persistent storage, compatibility adapters, palettes, URL plugins, host-native controls, and startup.
+- Six own palettes: **Graphite, Ember, Glacier, Orchard, Plum, Paper**. They color Korg's controls and settings; they do not implement full Discord themes.
+- An empty plugin registry. No plugin implementations or external runtime dependencies are bundled.
+- Partial, independently implemented `window.vendetta` / `window.bunny` adapters. Familiar API names do not mean universal legacy-plugin support. See [the API contract](docs/API.md).
+- An original Objective-C++ loader using Apple's Objective-C runtime and system libraries, with an embedded local JavaScript bundle. No RainTweak, Theos, Substrate, or ElleKit build path is required by the new loader.
 
-With Node.js 22 or newer installed:
+The actual runtime can download a user-entered HTTPS bundle or manifest, store its source, and enable it explicitly. Downloaded plugins execute in the host JavaScript runtime, not a security sandbox. New installs start disabled; saved enabled plugins can resume from their cached source. This is separate from the browser demo below.
+
+## Local design preview
+
+Requires Node.js 22 or newer; no package installation is needed:
 
 ```sh
 npm run dev
 ```
 
-Open the local address printed by the command. Sample servers, channels, local message composition, and theme choices work. Themes are saved in the browser when storage is available; demo messages last only until reload. The preview is a design study, not a pixel-for-pixel rendering of the native Discord app.
+Open the local address printed by the server. The small, phone-oriented preview shows Korg settings, the six palettes, and an initially empty URL list. **The URL form adds metadata only:** it never downloads a manifest or bundle, evaluates code, installs a plugin, or connects to Discord. Entries last for the current page visit; palette selection is saved locally when browser storage is available. No fonts, libraries, or code are fetched from a CDN.
 
-## Build the client customization
+This is an original design study for the implemented controls, not a native screenshot or proof of host integration.
 
-Requires Node.js 22+, Bun (tested version recorded in `package.json`), Git, and tar. No Xcode is needed for the JavaScript/Hermes bundle.
+## Local JavaScript build
 
 ```sh
 npm run build
-npm test
 npm run verify
+npm test
+python3 -m unittest discover -s tests -p 'test_package_ipa.py'
 ```
 
-The build downloads the exact Rain revision and archive checksum in `upstream.json`, applies the focused changes in `scripts/patches.mjs`, inserts the files in `overlays/`, and installs upstream's frozen lockfile with package lifecycle scripts disabled. It then uses Rain's own build tools to produce:
+These are verification commands, not a report that all checks have passed. Final runtime and packager integration checks belong to the main implementation pass.
 
-- `dist/korg.js` — compatible loader input in plain JavaScript.
-- `dist/korg.<version>.hbc` — Hermes bytecode for that engine version.
-- `dist/manifest.json` — versions, sizes, and SHA-256 checksums.
-- `dist/korg-source.tar.gz` — complete modified source and upstream lockfile.
-- Full upstream license, bundled dependency license texts, and installation notes.
+`scripts/build.mjs` syntax-checks and concatenates exactly nine local files in a fixed order. It emits `dist/korg.js` and `dist/manifest.json`; the manifest records every source's SHA-256 with `plugins: []` and `dependencies: []`. The verifier reconstructs the bundle from those inputs and checks exact equality and hashes. The build fetches no source, plugin catalog, package, or Hermes compiler. No Hermes bytecode is promised.
 
-Run tests after the first build so they can exercise the pinned Rain source and its real state-storage middleware. Tests before that cache exists explicitly skip integration cases. The tests cover failed saves, rollback, delayed theme refreshes, and safe-mode reload requirements. A successful build is verified before replacing the previous distribution, which is kept under `.build/previous-dist`.
+## Native build and installation
 
-Build output is ignored by Git. No Discord IPA or signing material is downloaded or committed. The original Rain sources are retrieved at build time instead of hiding an untracked vendor tree inside this repository. Changed upstream anchors fail the build rather than silently applying a partial patch.
+The native source build requires **macOS and full Xcode**, plus Node.js 22+ and Python 3.11+. Later macOS CI must compile and validate the actual component:
 
-## iPhone installation
+```sh
+npm run build:native
+```
 
-See [installation and recovery notes](docs/INSTALL.md). For a phone with regular Discord, the intended result is a separately installed Korg app with the customization embedded. The added native loader prepares that path without requiring a hosting account or a prior Rain installation. A compatible Discord IPA that you can supply and modify, packaging with the loader's hook runtime, and device signing remain necessary. This project does not fetch a proprietary app, bypass its encryption, or collect signing credentials.
+The system-only build compiles `native/KorgLoader.mm` directly with Xcode's iPhoneOS SDK. The collector prepares `artifacts/native/` with the loader, `KorgResources.bundle`, manifests, and a source archive. These components are not an IPA. Workflow runner actions are build infrastructure, not libraries bundled into Korg.
 
-An existing compatible RainTweak installation can also load the JavaScript build from a custom HTTPS address.
+The target callback was confirmed statically in Discord 353: `RCTHost` → `instance:didInitializeRuntime:`, encoding `v32@0:8@16^{Runtime=^^?}24`, image address `0x100610b54`. The JSI call contract is conditional on the public **React Native 0.80** ABI; static callback metadata does not establish the embedded engine's exact C++ layout. Compilation, synthetic tests, and hash checks cannot replace physical-device validation. See [installation](docs/INSTALL.md) and [ABI details](native/ABI.md).
 
-The native page is integrated with Rain's APIs; its runtime behavior cannot be proven by the browser preview or a successful bundle build. Rain's current compatibility target and the inspected loader revision are recorded in `upstream.json`.
+The original packager is intended to combine a verified native artifact and the supplied unencrypted Discord 353 IPA into a separate unsigned output. Manifest agreement, actual macOS output, packaging checks, signing of all nested code, and device startup remain release gates. The project does not fetch Discord, remove encryption, or collect signing credentials.
 
-## Credits and license
+## Authorship, licenses, and history
 
-Built on Rain and its contributors. Adapted source and Korg additions are MPL-2.0; the upstream license and exact modified source accompany the generated distribution. See [NOTICE.md](NOTICE.md) for attribution and the upstream package metadata discrepancy. RainTweak remains a separate OSL-3.0 project; its code is not included here.
+The replacement Korg implementation was independently authored after earlier mod-derived material had been read. This was **not a formally isolated clean-room process**; a claim of provable “100% unique” code is not possible. The [audit](docs/AUDIT.md) distinguishes prior provenance review, current source inventory, build verification, and unverified device behavior.
 
-Korg is unofficial and unaffiliated with Discord, Rain, or KORG Inc. Discord's terms restrict client modifications, which carry account risk. No App Store availability or official support is implied.
+New original Korg files use **MIT No Attribution (MIT-0)**; [LICENSE](LICENSE) is retained. MIT-0 imposes no attribution condition. This does not relicense older files or artifacts. Historical Rain (MPL-2.0), RainTweak (OSL-3.0), and ElleKit (BSD-3-Clause) material retains its notices and obligations, as do the supplied host app and its dependencies. See [NOTICE.md](NOTICE.md), including the pre-existing preview server's license header.
 
-
-## Native loader build
-
-After building the JavaScript bundle, `npm run prepare:native` verifies and downloads the pinned RainTweak source, applies the local-bundle changes, and prepares `.build/native/rain-tweak`. This preparation and its patch tests work on Linux. The native code itself requires macOS and full Xcode.
-
-On a Mac with GNU Make (`gmake`), `ldid`, and `xz` installed, run `npm run build:native`. The script checks out a pinned Theos revision and pinned submodules, uses the installed iPhoneOS SDK, compiles the loader, checks the arm64 library and embedded JavaScript checksum, and collects components, corresponding source, and licenses under `artifacts/native/`.
-
-The **Build Korg loader** GitHub Actions workflow runs the same path on `macos-15`. A successful workflow validates compilation and packaging, not iPhone installation or Discord runtime compatibility. Its output is a `.deb`/dylib/resource bundle, **not an installable IPA**. It never downloads Discord, signs a user's app, or publishes a release.
-
-The native loader is adapted from RainTweak under OSL-3.0; see [native notices](native/NOTICE.md). Preserve both the JavaScript and native licenses/source when distributing their components.
-
-## Bundled customization in 0.2
-
-Korg now exposes Rain's bundled plugin manifests in a searchable **Bundled features** library, grouped by purpose. It shows unavailable platform/capability combinations instead of attempting to enable them. This is a library of Rain plugins already compiled into Korg, not an installer for arbitrary Kettu plugins.
-
-Three optional one-tap packs add compatible features without disabling existing choices: **Essentials**, **Personal touches**, and **Media tools**. Individual feature choices are saved and applied after reload. Features involving message retention, external services, or removal of confirmations show an explanation before enabling. No pack is silently applied to an existing installation.
-
-Six offline palettes are included: **Amethyst, Midnight, Rose, Ocean, Forest, and Ember**, plus restoration of Discord's default. Fonts has a shortcut to Rain's importer; no font files are claimed to be bundled. The design preview includes representative feature selections stored only in the browser, explicitly separate from the native app.
-
-Plugin preferences use tracked writes and rollback; optional plugins wait for readable settings, while core recovery stays available. Startup completion cannot overwrite a preference saved for the next reload. Native/iOS 27 runtime compatibility still requires device testing; successful compilation is not proof that every bundled plugin works on that OS.
-
-## Repackage a supplied Discord 352 IPA
-
-`scripts/package-ipa.py` assembles a separate unsigned output from the specific unencrypted Discord 352/VoiceMenu input layout. It does not download Discord or remove encryption. The CLI pins the trusted Korg 0.2 native artifact SHA-256 by default, verifies its manifest, replaces the exact VoiceMenu weak-load command, and validates embedded binary dependencies. Supply a compatible arm64 hook runtime and its license for the current loader. See `--help` for local-file arguments. No IPA, provisioning profile, or credential is committed.
-
-Run the packager checks with `python3 -m unittest discover -s tests -p 'test_package_ipa.py'`. They cover Mach-O bounds/padding, thin and FAT binaries, encryption rejection, symbol exports, artifact tampering, ZIP paths, dependencies, permissions, and preservation of original resources. An inspection JSON beside the output records hashes and changes. Signing and device runtime verification remain separate.
+Korg is unofficial and unaffiliated with Discord, Rain, Vendetta, Bunny, or KORG Inc. No rights to the host app or trademarks are granted by Korg's license. Discord's [terms](https://discord.com/terms) restrict unauthorized client modifications; no official support or App Store availability is implied.

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">
-  <rect width="80" height="80" rx="23" fill="#211a30"/>
-  <path fill="#c6a5ff" d="M12 16c0-6 4-10 10-10s10 4 10 10v11L43 11c4-6 10-6 14-2s3 9 0 13L46 35l12 13c4 5 3 11-2 14-5 3-10 1-14-4L32 44v10c0 6-4 10-10 10S12 60 12 54V16Z" transform="translate(6 7) scale(.94)"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Korg">
+  <rect width="64" height="64" rx="19" fill="#282333"/>
+  <path d="M19 16v32m25-32L28 32l16 16" fill="none" stroke="#C3AEFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

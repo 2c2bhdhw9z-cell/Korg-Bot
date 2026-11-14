@@ -1,59 +1,70 @@
-"""Collect a built loader and exact source; never collect a Discord application."""
+#!/usr/bin/env python3
+"""Assemble and verify original Korg native-loader components."""
 from pathlib import Path
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import tarfile
+import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-WORK = ROOT / ".build/native/rain-tweak"
 OUT = ROOT / "artifacts/native"
-OUT.mkdir(parents=True, exist_ok=True)
+LIBRARY = ROOT / ".build/native/KorgLoader.dylib"
+DIST = ROOT / "dist"
+ALLOW = {"/System/Library/Frameworks/Foundation.framework/Foundation", "/System/Library/Frameworks/UIKit.framework/UIKit", "/usr/lib/libc++.1.dylib", "/usr/lib/libobjc.A.dylib", "/usr/lib/libSystem.B.dylib"}
+RUNTIME = ["core.js", "metro.js", "patcher.js", "storage.js", "compat.js", "themes.js", "plugins.js", "ui.js", "start.js"]
+SOURCES = ["native/KorgLoader.mm", "native/ABI.md", "scripts/build.mjs", "scripts/verify.mjs", "scripts/build-native.sh", "scripts/collect-native.py", ".github/workflows/build-native.yml", "tests/native.test.mjs", "package.json", "LICENSE", "NOTICE.md", "docs/API.md", "docs/AUDIT.md", "scripts/package-ipa.py", "tests/runtime.test.mjs", "tests/plugins.test.mjs", "tests/test_package_ipa.py"] + [f"runtime/{name}" for name in RUNTIME]
 
-packages = list((WORK / "packages").glob("*.deb"))
-if len(packages) != 1:
-    raise RuntimeError(f"Expected one freshly built loader package, found {len(packages)}")
-stage = WORK / ".theos/_"
-dylibs = list(stage.rglob("RainTweak.dylib"))
-resources = list(stage.rglob("BunnyResources.bundle"))
-if len(dylibs) != 1 or len(resources) != 1:
-    raise RuntimeError("Missing or ambiguous native library/resource bundle")
+def run(*args):
+    return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
 
-sha256 = lambda file: hashlib.sha256(file.read_bytes()).hexdigest()
-if sha256(resources[0] / "korg.js") != sha256(ROOT / "dist/korg.js"):
-    raise RuntimeError("Packaged Korg differs from verified JavaScript build")
-architecture = subprocess.check_output(["lipo", "-archs", str(dylibs[0])], text=True).strip()
-if architecture != "arm64":
-    raise RuntimeError(f"Unexpected native architecture: {architecture}")
-dependencies = subprocess.check_output(["otool", "-L", str(dylibs[0])], text=True)
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
-shutil.copy2(packages[0], OUT / "KorgLoader.deb")
-shutil.copy2(dylibs[0], OUT / "RainTweak.dylib")
-shutil.copytree(resources[0], OUT / "BunnyResources.bundle", dirs_exist_ok=True)
-shutil.copy2(WORK / "LICENSE", OUT / "LICENSE.RainTweak")
-shutil.copy2(ROOT / "native/NOTICE.md", OUT / "NATIVE-NOTICE.md")
-shutil.copy2(ROOT / "docs/INSTALL.md", OUT / "INSTALL.md")
-with tarfile.open(OUT / "korg-loader-source.tar.gz", "w:gz") as archive:
-    for name in ["Sources", "Headers", "Makefile", "control", "RainTweak.plist", "patch.plist", "LICENSE", "KorgPayload"]:
-        archive.add(WORK / name, arcname="KorgLoader/" + name)
-    archive.add(ROOT / "native/NOTICE.md", arcname="KorgLoader/KORG-NOTICE.md")
-    archive.add(ROOT / "native/loader.lock.json", arcname="KorgLoader/upstream.lock.json")
-
-manifest = {
-    "name": "KorgLoader",
-    "version": json.loads((ROOT / "package.json").read_text())["version"],
-    "status": "Compiled loader component; not an IPA; physical iPhone runtime unverified",
-    "architecture": architecture,
-    "xcode": subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
-    "sdk": subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-version"], text=True).strip(),
-    "theosRevision": "8167f59de02fd32cf45b16bfcb1330dfa5c9974c",
-    "dynamicDependencies": dependencies,
-    "requiresHookRuntime": "substrate" in dependencies.lower(),
-    "files": {},
-}
-for file in sorted(OUT.rglob("*")):
-    if file.is_file() and file.name != "manifest.json":
-        manifest["files"][str(file.relative_to(OUT))] = {"bytes": file.stat().st_size, "sha256": sha256(file)}
-(OUT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-print(f"Verified arm64 loader and embedded Korg; artifacts: {OUT}")
+if not LIBRARY.is_file():
+    raise SystemExit(f"Missing compiled loader: {LIBRARY}")
+if not (DIST / "korg.js").is_file() or not (DIST / "manifest.json").is_file():
+    raise SystemExit("Build dist/korg.js and dist/manifest.json first")
+arch = run("lipo", "-archs", str(LIBRARY))
+if arch != "arm64":
+    raise SystemExit(f"Expected arm64 loader, got {arch}")
+deps = run("otool", "-L", str(LIBRARY)).splitlines()[1:]
+for line in deps:
+    dependency = line.strip().split(" (compatibility", 1)[0]
+    if dependency == "@rpath/KorgLoader.dylib":
+        continue
+    if dependency not in ALLOW:
+        raise SystemExit(f"Non-system or unexpected dependency: {dependency}")
+manifest_js = json.loads((DIST / "manifest.json").read_text())
+if manifest_js.get("name") != "KorgOriginalRuntime" or manifest_js.get("plugins") != [] or manifest_js.get("dependencies") != []:
+    raise SystemExit("Unexpected runtime manifest contract")
+with tempfile.TemporaryDirectory(prefix="korg-artifacts-") as temp:
+    stage = Path(temp)
+    shutil.copy2(LIBRARY, stage / "KorgLoader.dylib")
+    resources = stage / "KorgResources.bundle"
+    resources.mkdir()
+    shutil.copy2(DIST / "korg.js", resources / "korg.js")
+    shutil.copy2(DIST / "manifest.json", resources / "manifest.json")
+    (stage / "SOURCE-NOTICE.md").write_text("Korg original loader and runtime sources are MIT-0; see LICENSE. No host application, host headers, downloaded source, plugins, or non-system native dependencies are included.\n")
+    (stage / "manifest.json").write_text(json.dumps({
+        "name": "KorgOriginalLoader", "version": "0.2.0-native-original", "architecture": "arm64",
+        "dependencyPolicy": "system-only", "dynamicDependencies": deps,
+        "runtime": {"name": manifest_js["name"], "version": manifest_js["version"], "plugins": [], "dependencies": []},
+        "sources": {name: digest(ROOT / name) for name in SOURCES}, "files": {}
+    }, indent=2) + "\n")
+    with tarfile.open(stage / "korg-source.tar.gz", "w:gz", format=tarfile.PAX_FORMAT) as archive:
+        for name in sorted(SOURCES):
+            archive.add(ROOT / name, arcname=f"KorgOriginal/{name}")
+    package = stage / "manifest.json"
+    manifest = json.loads(package.read_text())
+    for file in sorted(stage.rglob("*")):
+        if file.is_file() and file != package:
+            manifest["files"][str(file.relative_to(stage))] = {"bytes": file.stat().st_size, "sha256": digest(file)}
+    package.write_text(json.dumps(manifest, indent=2) + "\n")
+    if OUT.exists():
+        shutil.rmtree(OUT)
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(stage, OUT)
+print(f"Collected arm64 original Korg components at {OUT}")

@@ -1,77 +1,46 @@
-// SPDX-License-Identifier: MPL-2.0
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { nativeEdits } from "../native/patches.mjs";
-import { prepareNative } from "../scripts/prepare-native.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const lock = JSON.parse(await readFile(path.join(root, "native/loader.lock.json"), "utf8"));
-const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 
-async function archiveBytes() {
-    const cached = path.join(root, ".build/native/RainTweak-source.tar.gz");
-    try { return await readFile(cached); }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
-    const response = await fetch(lock.archive, { signal: AbortSignal.timeout(90000) });
-    assert.equal(response.status, 200);
-    return Buffer.from(await response.arrayBuffer());
-}
-
-test("pinned RainTweak native patches apply exactly and package bundled Korg", async () => {
-    const archive = await archiveBytes();
-    assert.equal(sha256(archive), lock.sha256);
-    const tmp = await mkdtemp(path.join(os.tmpdir(), "korg-native-test-"));
+test("native ABI call contract against a synthetic runtime", async () => {
+    const compiler = ["clang++", "c++", "g++"].find(command => spawnSync("which", [command], { encoding: "utf8" }).status === 0);
+    if (!compiler) return test.skip("No C++ compiler available for synthetic ABI test");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "korg-abi-test-"));
+    const source = path.join(tmp, "abi.cpp");
+    const binary = path.join(tmp, "abi-test");
+    const loader = path.join(root, "native/KorgLoader.mm").replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+    await writeFile(source, `#define KORG_ABI_TEST\n#include "${loader}"\n#include <cassert>\n#include <cstring>\nstruct Runtime { void **vtable; };\nstatic int calls = 0;\nstatic korg::Result evaluate(void *, const std::shared_ptr<const korg::Input> &input, const std::string &url) { ++calls; assert(url == "korg://embedded/bootstrap.js"); assert(input->length() == 5); assert(std::memcmp(input->bytes(), "hello", 5) == 0); return {0, 0, 0}; }\nint main() { void *table[3] = {}; table[2] = reinterpret_cast<void *>(&evaluate); Runtime runtime{table}; korg::evaluate(&runtime, "hello"); assert(calls == 1); }\n`);
     try {
-        const build = path.join(tmp, "native");
-        const dist = path.join(tmp, "dist");
-        await mkdir(build, { recursive: true });
-        await mkdir(dist);
-        await writeFile(path.join(build, "RainTweak-source.tar.gz"), archive);
-        for (const name of ["korg.js", "korg-source.tar.gz", "LICENSE.rain", "NOTICE.md", "THIRD_PARTY_NOTICES.md"]) {
-            await writeFile(path.join(dist, name), `test payload ${name}`);
-        }
-        const work = await prepareNative({ projectRoot: root, dist, build });
-        const original = path.join(tmp, "original");
-        await mkdir(original);
-        const extract = spawnSync("tar", ["-xzf", path.join(build, "RainTweak-source.tar.gz"), "--strip-components=1", "-C", original]);
-        assert.equal(extract.status, 0, extract.stderr?.toString());
-        for (const [relative, patch] of nativeEdits) {
-            const before = await readFile(path.join(original, relative), "utf8");
-            const after = await readFile(path.join(work, relative), "utf8");
-            assert.equal(after, patch(before), relative);
-            assert.throws(() => patch(after), /Upstream changed/, `${relative} should not reapply`);
-        }
-        const tweak = await readFile(path.join(work, "Sources/Tweak.xm"), "utf8");
-        const config = await readFile(path.join(work, "Sources/LoaderConfig.m"), "utf8");
-        const settings = await readFile(path.join(work, "Sources/Settings.m"), "utf8");
-        const make = await readFile(path.join(work, "Makefile"), "utf8");
-        assert.match(tweak, /stringByAppendingPathComponent:@"korg\.js"/);
-        assert.match(tweak, /\[JSI evaluate:bundle tag:@"korg:bundle" runtime:runtime\]/);
-        assert.match(tweak, /return nil; \/\/ No network fallback/);
-        assert.doesNotMatch(tweak, /releases\/download\/latest/);
-        assert.match(tweak, /!\[targetURL\.scheme isEqualToString:@"https"\]/);
-        assert.match(tweak, /korgEmbedded/);
-        assert.match(tweak, /\[http\.URL\.scheme isEqualToString:@"https"\]/);
-        assert.match(settings, /\[response\.URL\.scheme isEqualToString:@"https"\]/);
-        assert.match(tweak, /loaderName", jsi::String::createFromUtf8\(runtime, "RainTweak"\)/);
-        assert.doesNotMatch(config, /localhost:4040/);
-        assert.match(settings, /Reset to Bundled Korg/);
-        assert.doesNotMatch(settings, /showBundleSelector\(self\)/);
-        assert.match(make, /BunnyResources_RESOURCE_FILES = KorgPayload\/korg\.js /);
-        assert.equal((await readFile(path.join(work, "KorgPayload/korg.js"), "utf8")), "test payload korg.js");
-        assert.equal(await readFile(path.join(work, "KorgPayload/LICENSE.RainTweak"), "utf8"), await readFile(path.join(original, "LICENSE"), "utf8"));
-        assert.deepEqual((await readdir(path.join(work, "KorgPayload"))).sort(), ["LICENSE.RainTweak", "LICENSE.rain", "NOTICE.md", "THIRD_PARTY_NOTICES.md", "korg-source.tar.gz", "korg.js"].sort());
-        // A reused download must be verified before any source is modified.
-        await writeFile(path.join(build, "RainTweak-source.tar.gz"), "tampered");
-        await assert.rejects(prepareNative({ projectRoot: root, dist, build }), /checksum mismatch/);
-        assert.equal(await readFile(path.join(work, "Sources/Tweak.xm"), "utf8"), tweak);
-    } finally {
-        await rm(tmp, { recursive: true, force: true });
+        const built = spawnSync(compiler, ["-std=c++17", source, "-o", binary], { encoding: "utf8" });
+        assert.equal(built.status, 0, built.stderr);
+        const ran = spawnSync(binary, [], { encoding: "utf8" });
+        assert.equal(ran.status, 0, ran.stderr);
+    } finally { await rm(tmp, { recursive: true, force: true }); }
+});
+
+test("collected native artifact manifest and checksum contract", async t => {
+    const out = path.join(root, "artifacts/native");
+    try { await stat(out); } catch { return t.skip("No compiled artifact; macOS CI runs this test after native compilation"); }
+    const manifest = JSON.parse(await readFile(path.join(out, "manifest.json"), "utf8"));
+    assert.equal(manifest.name, "KorgOriginalLoader");
+    assert.equal(manifest.version, "0.2.0-native-original");
+    assert.equal(manifest.architecture, "arm64");
+    assert.equal(manifest.dependencyPolicy, "system-only");
+    for (const [name, expected] of Object.entries(manifest.files)) {
+        const bytes = await readFile(path.join(out, name));
+        assert.equal(bytes.length, expected.bytes, `${name}: size`);
+        assert.equal(createHash("sha256").update(bytes).digest("hex"), expected.sha256, `${name}: checksum`);
     }
+    assert.ok(manifest.files["KorgLoader.dylib"]);
+    assert.ok(manifest.files["KorgResources.bundle/korg.js"]);
+    assert.ok(manifest.files["KorgResources.bundle/manifest.json"]);
+    assert.ok(manifest.files["korg-source.tar.gz"]);
+    assert.ok(manifest.files["SOURCE-NOTICE.md"]);
 });

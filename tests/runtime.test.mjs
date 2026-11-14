@@ -372,7 +372,7 @@ function hostFixture() {
         useEffect(callback) { const cleanup = callback(); if (cleanup) effects.push(cleanup); },
     };
     const Native = Object.fromEntries(["View", "Text", "Switch", "Modal", "SafeAreaView", "ScrollView", "TextInput", "Pressable"].map(name => [name, ({ native: name })]));
-    Native.AppRegistry = { registerComponent(name, provider) { const Component = provider(); registrations.set(name, Component); return name; } };
+    Native.AppRegistry = { registerComponent(name, provider) { registrations.set(name, provider); return name; } };
     function require(id) { return records.get(id)?.publicModule.exports; }
     require.getModules = () => records;
     function define(factory, id) {
@@ -390,9 +390,11 @@ test("full runtime loads a real URL plugin, uses its persisted settings, patches
     const pluginSource = `module.exports = {
         onLoad: async function () {
             const api = require('@vendetta/plugin');
+            const patcher = require('@vendetta/patcher');
+            const metro = require('@vendetta/metro');
             api.storage.deep = { count: 1 };
             api.storage.deep.count = 2;
-            this.unpatch = api.patcher.after('run', api.metro.findByProps('run'), function (args, result) { return result + 10; });
+            this.unpatch = patcher.after('run', metro.findByProps('run'), function (args, result) { return result + 10; });
         },
         onUnload: async function () { this.unpatch(); }
     };`;
@@ -405,7 +407,7 @@ test("full runtime loads a real URL plugin, uses its persisted settings, patches
         __r: host.require, __d: host.define,
         fetch: fetcher, URL, AbortController, TextEncoder, setTimeout, clearTimeout,
         window: {},
-    }, fullModules);
+    }, modules);
     K.storage.setBackend(disk);
     for (const name of ["themes", "plugins", "ui", "start"]) {
         vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), context);
@@ -415,18 +417,20 @@ test("full runtime loads a real URL plugin, uses its persisted settings, patches
     host.publish(context, 2, { createElement: host.React.createElement, useState: host.React.useState, useEffect: host.React.useEffect });
     assert.equal(context.window.vendetta, context.window.bunny);
     assert.equal(typeof context.window.vendetta.storage.createStorage, "function");
+    host.publish(context, 3, { ...host.Native, AppRegistry: host.Native.AppRegistry });
     const rootRegistration = host.Native.AppRegistry.registerComponent("Root", () => function Root() {});
     assert.equal(rootRegistration, "Root");
-    const registeredElement = host.registrations.get("Root");
-    assert.equal(typeof registeredElement.type, "function");
-    const overlayElement = registeredElement.type(registeredElement.props);
-    assert.equal(overlayElement.type, host.Native.View);
+    const registeredProvider = host.registrations.get("Root");
+    assert.equal(typeof registeredProvider, "function");
+    const RegisteredRoot = registeredProvider();
+    assert.equal(RegisteredRoot.name, "KorgOverlay");
+    const overlayElement = RegisteredRoot({});
+    assert.equal(overlayElement.type.name, "Overlay");
+    assert.equal(overlayElement.type(overlayElement.props).type, host.Native.View);
     assert.equal(context.window.vendetta.ui.components.View, host.Native.View);
     assert.equal(host.registrations.size, 1);
-    const Root = host.registrations.get("Root");
-    assert.equal(typeof Root, "function");
     K.ui.openSettings();
-    Root({});
+    RegisteredRoot({});
     assert.ok(host.renders > 0);
     const installed = await K.plugins.install("https://plugins.test/real.js", { kind: "bundle" });
     assert.equal(installed.enabled, false);

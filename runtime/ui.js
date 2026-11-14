@@ -143,13 +143,12 @@
                 args[1] = function (...providerArgs) {
                     const Component = provider.apply(this, providerArgs);
                     function KorgOverlay(props) {
-                        useState();
                         // React can arrive after AppRegistry. Resolve again when the host renders.
                         attach();
                         if (!React || !Native || !K.plugins || !K.themes) return null;
                         return React.createElement(Overlay, { Component, props });
                     }
-                    return React && Native ? React.createElement(KorgOverlay, providerArgs[0] || {}) : KorgOverlay;
+                    return KorgOverlay;
                 };
             });
             attachedRegistry = registry;

@@ -24,29 +24,31 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install build packages
+      - name: Check toolchain
         run: |
-          npm install --global bun@1.4.3
-          brew install make ldid xz
           node --version
-          bun --version
+          python3 --version
           xcodebuild -version
 
-      - name: Build and verify Korg bundle
+      - name: Build and verify local runtime
         run: |
           npm run build
           npm run verify
+          npm test
+          python3 -m unittest discover -s tests -p 'test_*.py'
 
-      - name: Prepare and compile the native loader
+      - name: Compile and collect native loader
         run: bash scripts/build-native.sh
 
-      - name: Run regression checks
-        run: npm test
+      - name: Verify collected artifact
+        run: |
+          npm run verify
+          npm test
 
       - name: Upload loader, resources, source, and licenses
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: KorgLoader-0.2.0-components
+          name: Korg-original-loader-components
           path: artifacts/native/
           if-no-files-found: error
           retention-days: 14

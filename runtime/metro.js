@@ -172,7 +172,6 @@
         });
     }
     const common = {};
-    function subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback); }
     for (const name of ["React", "ReactNative", "FluxDispatcher"]) {
         Object.defineProperty(common, name, {
             enumerable: true,

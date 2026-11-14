@@ -1,52 +1,88 @@
-# Trying Korg on iPhone
+# Building and trying the original Korg runtime
 
-Korg adds its own settings and built-in themes to Rain. Chats, calls, accounts, and the rest of Discord continue to use Discord's existing app. This first build is experimental and has not been tested inside Discord on a physical iPhone.
+The independently authored loader and runtime source now exist in the staged tree. A physical iPhone run of the rewrite has not been verified. The browser preview is not an app, and a JavaScript bundle or native component ZIP cannot be installed by renaming it to `.ipa`.
 
-## Packaged IPA for the supplied Discord 352 app
+The user-supplied input is **Discord 353.0, build 122208**, arm64, with an unencrypted main executable (`cryptid=0`) and no injected tweak found in prior static inspection. It remains the input for later packaging. These instructions do not announce a newly built Discord 353 Korg IPA. The earlier Discord 352 Korg 0.2 package contains the historical Rain-derived stack and is not this rewrite.
 
-`Korg-0.2.0-Discord-352-unsigned.ipa` is an assembled app package, ready to import into an iPhone sideload signer. Its original VoiceMenu tweak and startup reference have been removed. Korg's loader, complete resource bundle, and ElleKit 1.1.3 hook runtime are included; their source/license notices are inside `BunnyResources.bundle/KorgDistribution`. No hosting or extra tweak injection is required.
+## Explore locally
 
-The package is **unsigned**. Your signer must sign the main app, extensions, frameworks, and added libraries and manage provisioning/entitlements. No signing credentials are needed in chat. It preserves Discord's original bundle identifier for the signer to configure. To keep regular Discord installed alongside Korg, use the signer's duplicate-app/custom-identifier option and a matching provisioning profile; do not replace your installed Discord unintentionally.
+With Node.js 22+:
 
-Static checks passed for ZIP integrity, all 11 Mach-O dependency graphs, removal of VoiceMenu, and the embedded Korg files. This does not establish iOS 27.0.1 runtime compatibility; first launch on the phone remains untested.
+```sh
+npm run dev
+```
 
-## Standalone build components
+The preview server prints its local address. Its settings design has six own palettes and a metadata-only URL demo. It neither connects to Discord nor downloads or executes plugin code. The URL list is temporary; the palette is stored in the browser when possible. No package install or external preview dependency is needed.
 
-- `korg.js`: Korg's JavaScript bundle, loaded by a compatible RainTweak installation.
-- `korg.98.hbc` (or the version recorded in `manifest.json`): the same bundle compiled for a particular Hermes engine. Prefer plain `korg.js` for the loader's custom-URL feature unless you have verified the engine version matches.
-- `korg-source.tar.gz`: the exact modified source, with the upstream lockfile and build scripts.
-- `manifest.json`: build identity and SHA-256 checksums.
+## Build the JavaScript input
 
-These files are **not an IPA**, the app package iOS installs. Renaming the bundle or zip to `.ipa` will not install Korg.
+```sh
+npm run build
+npm run verify
+npm test
+python3 -m unittest discover -s tests -p 'test_package_ipa.py'
+```
 
-## If Rain already works on your iPhone
+Python packaging requires Python 3.11+. These are commands to run, not a claim of successful final verification. The main implementation pass must resolve integration issues and report real results.
 
-1. Host the built `korg.js` on an HTTPS address accessible to your phone. Use a trusted host you control; the address must return the JavaScript file, not a sign-in page or a GitHub file-view page. This project does not publish a bundle automatically.
-2. Open RainTweak's recovery menu and choose **Load Custom Bundle**. Enter that HTTPS address. Rain also exposes custom bundle controls in its advanced settings; availability depends on the loader version.
-3. Close and reopen Discord after the loader has downloaded the file. The inspected loader may download the bundle for the next launch, so a second launch can be necessary.
-4. Open Discord settings → **Korg** → **Korg**. Choose **Amethyst** or **Midnight**, or keep Discord default. Plugins and Themes open Rain's existing managers.
-5. If the app stops loading, use the native loader recovery menu to clear/disable the custom bundle and return to Rain. A page inside Discord cannot repair a failure that happens before Discord opens.
+The local build produces:
 
-Korg uses Rain's existing local settings and theme storage. Trying it in an existing Rain installation shares those settings; it is not an isolated app. Korg presets do not download themes from the network. Existing upstream Rain features can still use their own network services.
+- `dist/korg.js`: the nine original runtime modules in a fixed order, syntax-checked as JavaScript.
+- `dist/manifest.json`: `KorgOriginalRuntime` identity, per-source SHA-256 hashes, `plugins: []`, and `dependencies: []`.
 
-## If you currently have regular Discord
+No Rain source, upstream lockfile, plugin implementation, runtime library, or Hermes compiler is downloaded. The verifier checks that the output exactly matches the hashed local inputs. These checks establish build contents, not iPhone behavior.
 
-The intended installation is a separate app named **Korg**, using app identifier `app.korg.discord`, alongside regular Discord. Korg's customization is bundled inside that app: no hosting account or prior Rain installation is needed. The App Store's installed Discord cannot load this bundle directly.
+## Compile on macOS
 
-The repository now prepares a pinned, modified RainTweak loader and has a macOS build workflow, **Build Korg loader**. It produces loader components and their source, not a signed Discord IPA. The packaged loader reads `BunnyResources.bundle/korg.js` on launch and does not download Rain as a default. Its recovery menu's **Reset to Bundled Korg** returns to that packaged version. A custom HTTPS bundle remains an explicit advanced option.
+Use full Xcode with the iPhoneOS SDK, Node.js 22+, and Python 3.11+:
 
-To finish the app, the loader package must be injected into a compatible Discord IPA that you are entitled to supply and modify. The native loader currently retains RainTweak's substrate hook dependency, so the app-packaging step must supply a compatible hook runtime and its license/source notices. No such runtime or proprietary IPA is fetched by this workflow. The resulting app must then be signed for your device through an installation tool you control. Neither this chat nor the repository needs your Discord password or Apple password.
+```sh
+npm run build:native
+```
 
-Having regular Discord installed does not provide a reusable IPA or signing approval to the development computer. Those are the remaining external inputs. The Linux development computer cannot run Xcode or validate an iPhone install.
+The original build uses Xcode's compiler directly for an arm64 Objective-C++ dylib targeting iOS 16+. There is no Theos/RainTweak preparation or third-party hook runtime to supply. The collector checks the loader against an Apple-system dependency allowlist and assembles:
 
-The inspected [RainTweak source](https://codeberg.org/raincord/RainTweak) requires Discord v332 or newer for its runtime hooks. The pinned Rain bundle declares iOS build `110861`; that number is an upstream compatibility target, not a guarantee that other builds work. RainTweak's README also says iOS 27 is unsupported. Check your actual iOS, Discord, and loader versions before installation.
+- `KorgLoader.dylib`
+- `KorgResources.bundle/korg.js` and its runtime manifest
+- A native manifest containing source and component hashes
+- `korg-source.tar.gz` and the source notice
 
-This repository does not fetch or redistribute Discord's proprietary IPA, defeat its app encryption, or collect your Discord password or account token. Signing material belongs outside the repository. Device testing and installation remain necessary before this can be called a working iPhone client.
+The **Build Korg loader** workflow is the macOS build route. Its later actual output must be checked; configuration alone is not a successful build. Loader components do not contain Discord and are not a signed IPA.
 
-## Account and installation limits
+## Package a separate app copy
 
-Discord's [terms](https://discord.com/terms) restrict unauthorized client modifications. Using them can put your account at risk. Sideloaded apps can also have notification, sharing, passkey, and signing limitations. There is no claim of App Store approval or official Discord support.
+After main-agent integration checks and a successful actual native build, the intended CLI is:
 
-## Recovery
+```sh
+python3 scripts/package-ipa.py \
+  --ipa /path/to/Discord-353.ipa \
+  --loader-zip /path/to/native-components.zip \
+  --expected-loader-sha256 TRUSTED_ZIP_SHA256 \
+  --output /path/to/Korg-353-unsigned.ipa
+```
 
-Within Korg, **Use Discord default** clears the selected custom palette without removing themes. **Undo last theme change** is available while the page remains open. **Safe mode** pauses custom themes and non-essential plugins after a reload. It does not remove every upstream core patch. **Reload Discord** can interrupt calls or unsent messages, so finish those first.
+Use an archive whose root contains the collected component files, and obtain its trusted SHA-256 from the actual build. The runtime builder, collector, and packager must agree on their manifest contract before this path is considered ready. The main agent owns that integration and testing; no complete package is claimed by this documentation pass.
+
+The original packager is designed to preserve the supplied input, validate Mach-O/ZIP structure and dependencies, add `KorgLoader.dylib` and `KorgResources.bundle`, remove old signatures and recognized legacy tweak resources if encountered, and produce a separate unsigned IPA with an inspection report. The clean supplied 353 input does not require an old tweak to be present. The packager does not remove encryption or download Discord.
+
+A signer you control must sign the app, added loader, frameworks, and extensions and configure provisioning and entitlements. The packager preserves Discord's identifier; use your signer's duplicate-app/identifier configuration if you need a separate install alongside regular Discord. Keep credentials and provisioning material outside the repository.
+
+## Native compatibility boundary
+
+Static host inspection confirmed `RCTHost` implements `instance:didInitializeRuntime:` with encoding `v32@0:8@16^{Runtime=^^?}24` at image address `0x100610b54`. The loader targets the public React Native **0.80** JSI ABI. That confirms a callback location and signature, not the embedded engine's exact C++ vtable, return convention, or physical-device behavior. See [the ABI contract](../native/ABI.md).
+
+The loader reads only the embedded UTF-8 JavaScript input and evaluates it on the initialization callback's runtime thread before forwarding to the original callback. Startup timing, host module discovery, UI attachment, persistence, recovery from malformed input, and iOS 27 execution still require actual device checks. Neither Linux synthetic tests nor a macOS compile can establish all of these.
+
+## Controls and recovery
+
+If host attachment succeeds, the runtime wraps the React Native root registration and provides a floating **K** control opening Korg's own settings. The six palettes—Graphite, Ember, Glacier, Orchard, Plum, Paper—color those controls only. No full Discord theme engine, font importer, old plugin packs, native safe-mode menu, or global restore/undo behavior is promised.
+
+The actual runtime starts with no plugins. Its URL controls accept a direct HTTPS bundle or JSON manifest, store downloaded source disabled initially, and expose enable, disable, update, remove, and supported exported settings. Enabled plugins run with host JavaScript privileges through a partial Vendetta/Bunny adapter; unsupported APIs or host changes can break them. The browser URL demo does none of this execution.
+
+If the host opens, disable or remove a failing plugin in Korg settings. If it cannot open, an in-app control cannot repair startup: keep a known-good supplied IPA and signing setup available so you can reinstall a working copy. Do not assume a native recovery menu exists in this loader.
+
+## Licenses and installation limits
+
+New original Korg files are MIT-0 with no attribution condition; the [license](../LICENSE) is retained. Historical Rain/MPL-2.0, RainTweak/OSL-3.0, and ElleKit/BSD-3-Clause artifacts keep their obligations. Host software and subsequently downloaded plugins keep their own rights and notices. Read [NOTICE.md](../NOTICE.md) before redistributing an artifact.
+
+This is independently authored replacement work after prior source review, not a formal clean-room certification or provable “100% unique” implementation. Discord's [terms](https://discord.com/terms) restrict unauthorized modifications. Signing, notifications, extensions, and other host services can impose additional installation limits; no official support or App Store approval is implied.

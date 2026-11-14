@@ -1,33 +1,103 @@
-# Korg provenance and rewrite audit
+# Korg provenance and current-tree audit
 
-## Scope and conclusion
+## Scope and evidence
 
-A read-through of the pre-rewrite repository established explicit Rain derivation: `scripts/build.mjs` fetched and built Rain; `native/patches.mjs` and `scripts/prepare-native.mjs` transformed RainTweak; the overlays identified themselves as adapted. This implementation has been replaced in the current tree. Its new build accepts only the nine files listed in `scripts/build.mjs` and emits a manifest that hashes each input. It fetches no build/runtime code and bundles no plugin implementations. `scripts/package-ipa.py` rejects non-Korg native component identities and any payload other than the two declared runtime files plus their generated source notices.
+The initial provenance audit is recorded in the prior working context as a complete **32-file, 4,161-line** read split across agents. It established that the old builder fetched Rain, native preparation transformed RainTweak, and overlays identified their derivation. That is historical audit evidence, not a fresh count of the replacement tree.
 
-This is a documented source review and dependency inspection—not a legal opinion or mathematically provable claim that no implementation resembles prior work. The earlier implementers had read the mod-derived version before authoring the replacement; this was not a formally isolated clean-room process. Standard API names are reimplemented from the behavior specified in `docs/API.md`. Public host ABI declarations informed the loader contract.
+This pass enumerated the entire current repository-plus-staged snapshot with `list_files` and read **all 34 listed files completely**, including all docs, preview assets, runtime bodies, scripts, tests, workflow, license, notices, and `.gitignore`. No listed file was excluded because of its name, size, category, or ignore rule. The starting snapshot contained **4,132 text lines**; edits and concurrent integration change that total. The empty `overlays/` folder contained no file to review. This is a repository-source inventory, not a claim that ignored computer build output, historical binaries, or the proprietary IPA were re-read in this pass.
 
-## Current implementation map
+The replacement runtime and loader **exist in the current staged tree**. Statements that they are lost, missing, or that the current JavaScript builder still downloads Rain are obsolete. No copied mod implementation bodies were identified in the reviewed current tree. This source review and the recorded authorship history support an independently authored replacement; they do not prove every expression is unique.
 
-- `native/KorgLoader.mm`: original Apple Objective-C runtime interception and embedded-source evaluation; ABI facts and explicit limits in `native/ABI.md`.
-- `runtime/core.js`: Korg state and logging.
-- `runtime/metro.js`: observation, module exports index, finders, and lazy common exports.
-- `runtime/patcher.js`: plugin-scoped wrappers and out-of-order removal.
-- `runtime/storage.js`: namespaced host storage, deep settings proxies, and tracked writes.
-- `runtime/compat.js`: independently implemented `window.vendetta`/`window.bunny` compatibility objects.
-- `runtime/themes.js`: six palettes applied to Korg controls, not assumed to theme Discord globally.
-- `runtime/plugins.js`: empty-by-default, explicit HTTPS bundle/manifest loader; no packaged third-party plugin source.
-- `runtime/ui.js`: host-native settings UI and module registration interception.
-- `runtime/start.js`: synchronous early setup.
-- `scripts/build.mjs`: hashes, concatenates, and syntax-checks exactly nine local runtime inputs.
-- `scripts/package-ipa.py`: original Mach-O/ZIP validations and the current resource allowlist.
-- `preview/`: local-only settings design preview; it makes no network requests and evaluates no URLs.
+The authors had already read mod-derived material. This was **not a formally isolated clean-room process**, and a provable “100% unique” claim is not possible. Familiar API names and public React Native declarations describe interface contracts, not incorporated mod bodies. This audit is not a legal opinion.
 
-## Historical artifacts and licenses
+## Complete current file inventory
 
-The previous implementation and 0.2 distributions incorporated Rain (MPL-2.0), RainTweak (OSL-3.0), and ElleKit (BSD-3-Clause). Those prior artifacts and Git history retain their associated obligations. This source rewrite does not erase history or retroactively change previously delivered files. The current source carries `LICENSE` (MIT-0) and does not include those upstream dependencies. The user-provided IPA still contains Discord, React Native/Hermes and related host files, which remain third-party property.
+Counts are files, not runtime dependencies. Every path in the enumerated snapshot is listed below.
 
-The native loader's declared React Native v0.80 ABI contract has not been confirmed against a physical Discord runtime. The new IPA must be checked again when the user provides their newer Discord version. Compilation, bundle hashes, synthetic ABI tests, and static dependency checks do not prove that the injector or plugins work on iOS 27.
+| Category | Count | Role |
+| --- | ---: | --- |
+| Root metadata | 5 | Project identity, license, notices, ignores |
+| Documentation | 3 | API, installation, audit |
+| Native | 2 | Original loader and ABI contract |
+| Runtime | 9 | Fixed local bundle inputs |
+| Build/development scripts | 6 | Local build, verify, compile, collect, package, preview |
+| Browser preview | 4 | Original local settings design |
+| Tests | 4 | Runtime/plugin/native and packaging checks |
+| CI | 1 | macOS build workflow |
+| **Total** | **34** | **No listed file omitted** |
 
-## Verification for each build
+### Root metadata — 5
 
-`npm run verify` proves that the shipped bundle is exactly the manifest-hashed local source list, and that plugin/dependency lists are empty. Node tests cover API ownership, storage, plugin lifecycle, URL handling, and themes. Python tests exercise Mach-O parsing and packaging. A Mac workflow builds the native code and rejects non-system dependencies. Device startup remains a separate validation stage.
+- `.gitignore`: build output, signing material, IPA and Python-cache exclusions. Ignore rules are not an audit exclusion.
+- `LICENSE`: retained MIT-0 permission/disclaimer and host/history boundary.
+- `NOTICE.md`: original authorship, historical obligations, and retained file-level notice exception.
+- `package.json`: local scripts and MIT-0 package metadata; no dependency list. Package-manager metadata is not a bundled runtime dependency.
+- `README.md`: implementation status, local preview/build, native and license limits.
+
+### Documentation — 3
+
+- `docs/API.md`: partial Vendetta/Bunny API behavior and actual runtime URL-plugin lifecycle.
+- `docs/INSTALL.md`: supplied 353 input, build/packaging/signing stages and recovery limits.
+- `docs/AUDIT.md`: this provenance record, full inventory, and verification boundary.
+
+### Native — 2
+
+- `native/KorgLoader.mm`: original Objective-C runtime method interception and embedded-source evaluation; independently named C++ ABI carrier, no imported mod headers or hook library.
+- `native/ABI.md`: public RN 0.80 contract, evidence and limitations; its individual claims must stay aligned with actual build/test results. The target now includes static method evidence from the supplied Discord 353; its public RN ABI baseline remains conditional until device execution.
+
+### Runtime — 9
+
+- `runtime/core.js`: runtime state and scoped logging.
+- `runtime/metro.js`: early registration observation, guarded exports index and finders; does not initialize every host module to discover it.
+- `runtime/patcher.js`: original owner-scoped wrappers, callback contracts and out-of-order cleanup.
+- `runtime/storage.js`: namespaced host storage, deep observed settings, queued snapshots and surfaced failures.
+- `runtime/compat.js`: original partial `window.vendetta` / `window.bunny` adapters with scoped patch/storage ownership; no universal compatibility claim.
+- `runtime/themes.js`: six own palettes, Graphite/Ember/Glacier/Orchard/Plum/Paper, applied to Korg controls only.
+- `runtime/plugins.js`: empty-by-default plugin registry, user-entered HTTPS bundle/manifest retrieval, cache, explicit enable and lifecycle cleanup. This is original loader code, not bundled plugin implementations; enabled remote code runs with host privileges.
+- `runtime/ui.js`: original host-native controls and root-registration wrapper, URL operations, plugin settings and palette selection.
+- `runtime/start.js`: synchronous early setup and explicit boot state; readiness flags alone do not prove the host UI works.
+
+### Scripts — 6
+
+- `scripts/build.mjs`: fixed nine-file local concatenation and syntax check; emits source hashes with `plugins: []`, `dependencies: []`. No upstream fetch or package installation.
+- `scripts/verify.mjs`: verifies exact local input set, source hashes, deterministic bundle bytes, empty plugin/dependency arrays and syntax. Hashes establish contents, not authorship or device compatibility.
+- `scripts/build-native.sh`: direct Xcode arm64 compilation with Apple frameworks/libc++; no RainTweak, Theos or external hook-runtime setup.
+- `scripts/collect-native.py`: system-dependency allowlist, component/source hash manifest and source archive collection.
+- `scripts/package-ipa.py`: original ZIP/Mach-O validation and unsigned Discord 353 packaging path. The native and runtime manifest versions/fields are now aligned. Synthetic tests passed; the exact compiled artifact and supplied IPA must also pass the final packaging checks.
+- `scripts/preview.mjs`: replaced with an independent local HTTP asset server using only Node built-ins. The previous implementation and its MPL header were removed rather than relicensed; history retains the old notice.
+
+### Preview — 4
+
+- `preview/index.html`: original accessible phone-oriented settings design, local assets only, no fake Discord connection or sample-chat client.
+- `preview/app.js`: six palette controls and metadata-only URL list. No fetch, URL navigation, dynamic code evaluation or actual plugin installation; text is rendered as text nodes.
+- `preview/style.css`: original responsive layout, local system font and small purple visual accent; palette colors represent the runtime's own controls.
+- `preview/icon.svg`: original geometric Korg mark, no external asset reference.
+
+The preview is deliberately separate from the actual URL downloader/evaluator in `runtime/plugins.js`. A demo list entry means no manifest or source was retrieved. New preview assets are MIT-0 and use no external library, font, script or stylesheet.
+
+### Tests — 4
+
+- `tests/runtime.test.mjs`: Metro capture, patch ownership, storage semantics, compatibility and synthetic host UI/plugin integration.
+- `tests/plugins.test.mjs`: URL/manifest handling, cache/lifecycle failures, partial dependency mappings, palettes and startup/UI fixtures.
+- `tests/native.test.mjs`: synthetic C++ ABI call and conditional collected-artifact hash checks. Missing native output can produce a skip; a skip is not native verification.
+- `tests/test_package_ipa.py`: synthetic Mach-O/ZIP fixtures, package preservation, legacy-resource removal, artifact hashes and rejection cases. Fixtures do not establish real supplied-IPA packaging success.
+
+### CI — 1
+
+- `.github/workflows/build-native.yml`: macOS checkout, local build/test, native collection and artifact upload. Pinned runner actions are infrastructure, not incorporated runtime dependencies. A workflow file is not evidence that it has passed.
+
+## License and historical boundary
+
+New independently authored Korg files are **MIT No Attribution (MIT-0)** with the original `LICENSE` retained; there is no attribution condition. Earlier file-level notices and artifact licenses remain effective for those historical revisions. All current implementation bodies have been replaced or reviewed as original Korg code; changing package metadata alone would not erase an inherited obligation.
+
+The old Rain/MPL-2.0, RainTweak/OSL-3.0 and ElleKit/BSD-3-Clause revisions and delivered artifacts retain all applicable notices, source and redistribution obligations. They must not be relabelled MIT-0. The prior Rain package.json BSD metadata discrepancy did not replace its actual MPL license. Deleting old build paths does not erase Git history or obligations attached to prior distributions.
+
+The current local runtime bundles no third-party plugin bodies or external runtime dependencies. That does not remove the supplied Discord/React Native/Hermes host's rights and licenses or Apple's platform dependencies. Later user-downloaded plugins retain their own licenses. No audit claim extends Korg's license to these materials.
+
+## Host evidence and unverified stages
+
+Prior inspection of the available supplied IPA established **Discord 353.0, build 122208, arm64, `cryptid=0`, no injected tweak**. Static Objective-C metadata confirmed `RCTHost` → `instance:didInitializeRuntime:`, encoding `v32@0:8@16^{Runtime=^^?}24`, image address `0x100610b54`. These facts are carried forward from the host inspection, not a new physical run in this documentation pass.
+
+The native JSI adapter is conditional on the public **React Native 0.80** binary interface. The callback encoding does not verify the exact embedded engine's vtable or C++ return convention. Physical startup, runtime-thread behavior, UI registration timing, persistence, error recovery and iOS 27 compatibility remain unverified. The older Discord 352 Rain-derived IPA cannot validate this rewrite.
+
+Main-agent integration owns runtime/package tests and fixes; later macOS CI must build the actual component. Do not infer “all tests pass,” a successful native build, a produced 353 IPA, signing, or device compatibility from this source inventory. Required evidence is actual local build/verification output, final test results including skips, a matching native/component manifest, real supplied-IPA packaging inspection, and a physical-device run. No sync, save, native compile, or runtime test was performed by this documentation/preview pass.

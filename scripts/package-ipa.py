@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Repack a user-supplied, decrypted Discord 352 IPA; never sign or decrypt it.
+"""Package an original Korg loader and runtime into an unmodified Discord IPA copy.
 
-Stdlib only. All binary edits are confined to Mach-O headers/load commands;
-section offsets, instructions and existing signature blobs stay in place.
-Run tests with: python3 -m unittest discover -s tests -p 'test_package_ipa.py'
+The output is unsigned and must be signed by the user's own signer. Stdlib only.
 """
 import argparse
 import copy
@@ -19,8 +17,7 @@ import tempfile
 import zipfile
 
 ARM64 = 0x100000C
-VOICE = '@executable_path/VoiceMenu.dylib'
-RAIN = '@executable_path/Frameworks/RainTweak.dylib'
+LOADER_PATH = '@executable_path/Frameworks/KorgLoader.dylib'
 DYLIBS = {0xC, 0x80000018, 0x8000001F, 0x20, 0x80000023}
 MAGICS = {b'\xce\xfa\xed\xfe': ('<', False), b'\xcf\xfa\xed\xfe': ('<', True),
           b'\xfe\xed\xfa\xce': ('>', False), b'\xfe\xed\xfa\xcf': ('>', True)}
@@ -45,7 +42,6 @@ def cstring(data, offset, end):
 
 
 def slices(data):
-    """Return checked (offset, size) pairs, including every fat architecture."""
     if data[:4] in MAGICS:
         return [(0, len(data))]
     require(data[:4] in FATS and len(data) >= 8, 'Not a Mach-O binary')
@@ -83,7 +79,7 @@ def parse(data):
         require(length >= 8 and length % (8 if wide else 4) == 0 and cursor + length <= end, 'Invalid load command size')
         raw = data[cursor:cursor + length]
         item = {'cmd': cmd, 'raw': raw}
-        if cmd in DYLIBS or cmd == 0xD or cmd == 0x8000001C:
+        if cmd in DYLIBS or cmd in (0xD, 0x8000001C):
             minimum = 12 if cmd == 0x8000001C else 24
             require(length >= minimum, 'Truncated library command')
             offset = struct.unpack_from(endian + 'I', raw, 8)[0]
@@ -91,7 +87,8 @@ def parse(data):
             item['name'] = cstring(raw, offset, length)
         if cmd in (0x21, 0x2C):
             require(length >= (24 if cmd == 0x2C else 20), 'Truncated encryption command')
-            require(struct.unpack_from(endian + 'I', raw, 16)[0] == 0, 'Encrypted Mach-O (cryptid != 0); supply an unencrypted IPA')
+            require(struct.unpack_from(endian + 'I', raw, 16)[0] == 0,
+                    'Encrypted Mach-O (cryptid != 0); supply an unencrypted IPA')
         if cmd in (1, 0x19):
             segwide = cmd == 0x19
             base, stride = (72, 80) if segwide else (56, 68)
@@ -107,7 +104,7 @@ def parse(data):
                 offset = struct.unpack_from(endian + 'I', raw, section + (48 if segwide else 40))[0]
                 flags = struct.unpack_from(endian + 'I', raw, section + (64 if segwide else 56))[0]
                 extent = struct.unpack_from(endian + ('Q' if segwide else 'I'), raw, section + (40 if segwide else 36))[0]
-                if extent and flags & 0xFF not in (1, 0xC, 0x12):  # zero-fill has no file bytes
+                if extent and flags & 0xFF not in (1, 0xC, 0x12):
                     require(offset >= end and offset + extent <= len(data), 'Invalid section file bounds')
                     sections.append(offset)
         commands.append(item)
@@ -123,29 +120,26 @@ def dylib_command(name, endian='<'):
     return struct.pack(endian + 'IIIIII', 0xC, size, 24, 0, 0, 0) + encoded + bytes(size - 24 - len(encoded))
 
 
-def rewrite(data, *, executable=False, hook=False):
+def rewrite(data, *, executable=False):
     result = bytearray(data)
     for offset, size in slices(data):
         chunk = data[offset:offset + size]
         header = parse(chunk)
-        commands, voices, rains = [], 0, 0
+        commands = []
+        load_count = 0
         for item in header['commands']:
-            cmd, name = item['cmd'], item.get('name')
-            if cmd == 0x1D:  # LC_CODE_SIGNATURE; its bytes remain unreferenced
+            cmd, name = item['cmd'], item.get('name', '')
+            if cmd == 0x1D:  # LC_CODE_SIGNATURE; signature bytes remain unreferenced
                 continue
-            if executable and name == VOICE and cmd in DYLIBS:
-                require(cmd == 0x80000018, 'VoiceMenu must be a weak load command')
-                voices += 1
+            if executable and cmd in DYLIBS and name == LOADER_PATH:
+                load_count += 1
                 continue
-            if executable and name == RAIN and cmd in DYLIBS:
-                rains += 1
-            if hook and cmd in DYLIBS and name and 'CydiaSubstrate' in name:
-                commands.append(dylib_command('@loader_path/libellekit.dylib', header['endian']))
-            else:
-                commands.append(item['raw'])
+            if executable and cmd in DYLIBS and is_known_old_load(name):
+                continue
+            commands.append(item['raw'])
         if executable:
-            require(voices == 1 and rains == 0, 'Expected exactly one weak VoiceMenu load and no existing Korg load')
-            commands.append(dylib_command(RAIN, header['endian']))
+            require(load_count <= 1, 'Duplicate Korg loader load commands')
+            commands.append(dylib_command(LOADER_PATH, header['endian']))
         region = b''.join(commands)
         newend = header['start'] + len(region)
         require(newend <= header['limit'], 'Insufficient Mach-O header padding')
@@ -157,70 +151,11 @@ def rewrite(data, *, executable=False, hook=False):
     return bytes(result)
 
 
-def exports_hook(data):
-    """Require an externally defined symbol in nlist or an actual export trie.
-
-    A raw string match would also accept an undefined import or debug string.
-    """
-    def uleb(blob, cursor):
-        value = shift = 0
-        while cursor < len(blob) and shift < 64:
-            byte = blob[cursor]
-            cursor += 1
-            value |= (byte & 127) << shift
-            if byte < 128:
-                return value, cursor
-            shift += 7
-        raise ValueError('Malformed export trie integer')
-
-    for offset, size in slices(data):
-        chunk = data[offset:offset + size]
-        header = parse(chunk)
-        if header['cpu'] != ARM64:
-            continue
-        for item in header['commands']:
-            raw, cmd, endian = item['raw'], item['cmd'], header['endian']
-            if cmd == 2:
-                require(len(raw) >= 24, 'Truncated symbol table command')
-                symoff, count, stroff, strsize = struct.unpack_from(endian + 'IIII', raw, 8)
-                stride = 16 if header['wide'] else 12
-                require(symoff + count * stride <= size and stroff + strsize <= size, 'Invalid symbol table bounds')
-                for i in range(count):
-                    entry = symoff + i * stride
-                    index, kind, section = struct.unpack_from(endian + 'IBB', chunk, entry)
-                    if index < strsize and kind & 0xE0 == 0 and kind & 1 and kind & 0xE == 0xE and section:
-                        if cstring(chunk, stroff + index, stroff + strsize) == '_MSHookMessageEx':
-                            return True
-            if cmd not in (0x22, 0x80000022, 0x80000033):
-                continue
-            position = 40 if cmd in (0x22, 0x80000022) else 8
-            require(len(raw) >= position + 8, 'Truncated export command')
-            start, length = struct.unpack_from(endian + 'II', raw, position)
-            require(start + length <= size, 'Invalid export trie bounds')
-            blob, target = chunk[start:start + length], '_MSHookMessageEx'
-            cursor, prefix, visited = 0, '', set()
-            while blob:
-                require(cursor not in visited and cursor < len(blob), 'Malformed export trie')
-                visited.add(cursor)
-                terminal, body = uleb(blob, cursor)
-                require(body + terminal < len(blob), 'Truncated export trie node')
-                if prefix == target and terminal:
-                    flags, _ = uleb(blob, body)
-                    if flags & 0x08 == 0:  # require a definition, not a re-export
-                        return True
-                children = body + terminal
-                cursor = children + 1
-                match = None
-                for _ in range(blob[children]):
-                    edge = cstring(blob, cursor, len(blob))
-                    cursor += len(edge.encode('utf-8')) + 1
-                    child, cursor = uleb(blob, cursor)
-                    if target.startswith(prefix + edge):
-                        match = (child, prefix + edge)
-                if match is None:
-                    break
-                cursor, prefix = match
-    return False
+def is_known_old_load(name):
+    value = name.lower()
+    return (value.endswith('/voicemenu.dylib') or value.endswith('/raintweak.dylib') or
+            value.endswith('/libellekit.dylib') or 'bunnyresources' in value or
+            'cydiasubstrate' in value or 'ellekit' in value)
 
 
 def safe_name(name):
@@ -241,44 +176,50 @@ def read_zip(path):
             total += info.file_size
             require(total <= 2 * 1024**3, 'ZIP uncompressed size exceeds 2 GiB')
             entries[name] = (info, None if info.is_dir() else archive.read(info))
-    require(all(not any('/'.join(PurePosixPath(name).parts[:i]) in entries and
-                        entries['/'.join(PurePosixPath(name).parts[:i])][1] is not None
-                        for i in range(1, len(PurePosixPath(name).parts))) for name in entries), 'ZIP file/directory collision')
+    for name in entries:
+        parts = PurePosixPath(name).parts
+        require(not any('/'.join(parts[:i]) in entries and entries['/'.join(parts[:i])][1] is not None
+                        for i in range(1, len(parts))), 'ZIP file/directory collision')
     return entries
-
-
-def verified_loader(path):
-    archive = read_zip(path)
-    manifests = [name for name in archive if PurePosixPath(name).name == 'manifest.json']
-    require(len(manifests) == 1, 'Expected one native manifest')
-    manifest_path = manifests[0]
-    prefix = manifest_path[:-len('manifest.json')]
-    manifest = json.loads(archive[manifest_path][1])
-    require(manifest.get('name') == 'KorgLoader' and manifest.get('architecture') == 'arm64', 'Unexpected native manifest identity')
-    files = manifest.get('files')
-    require(isinstance(files, dict) and files, 'Missing native manifest checksums')
-    verified = {}
-    for name, expected in files.items():
-        require(safe_name(name) == name, 'Unsafe manifest path')
-        entry = archive.get(prefix + name)
-        require(entry is not None and entry[1] is not None, 'Missing manifest file: ' + name)
-        data = entry[1]
-        require(len(data) == expected['bytes'] and sha(data) == expected['sha256'], 'Manifest checksum mismatch: ' + name)
-        verified[name] = entry
-    require({name for name, (_, data) in archive.items() if data is not None} ==
-            {prefix + name for name in files} | {manifest_path}, 'Unlisted native artifact file')
-    for name in ('RainTweak.dylib', 'BunnyResources.bundle/korg.js', 'korg-loader-source.tar.gz', 'LICENSE.RainTweak', 'NATIVE-NOTICE.md'):
-        require(name in verified, 'Missing required native artifact: ' + name)
-    return verified, manifest
 
 
 def is_macho(data):
     return data is not None and data[:4] in (MAGICS.keys() | FATS.keys())
 
 
-def library_commands(data):
-    return [dict(cpu=parse(data[o:o + n])['cpu'], libraries=[c['name'] for c in parse(data[o:o + n])['commands'] if c['cmd'] in DYLIBS])
-            for o, n in slices(data)]
+def verified_loader(path):
+    archive = read_zip(path)
+    expected_files = {'KorgLoader.dylib', 'KorgResources.bundle/korg.js',
+                      'KorgResources.bundle/manifest.json', 'korg-source.tar.gz', 'SOURCE-NOTICE.md'}
+    require(set(archive) == expected_files | {'manifest.json'}, 'Native archive has unexpected or missing files')
+    manifest = json.loads(archive['manifest.json'][1])
+    require(manifest.get('name') == 'KorgOriginalLoader' and
+            manifest.get('version') == '0.2.0-native-original' and
+            manifest.get('architecture') == 'arm64', 'Unexpected native manifest identity')
+    require(isinstance(manifest.get('files'), dict) and set(manifest['files']) == expected_files,
+            'Native manifest file list mismatch')
+    for name in expected_files:
+        data = archive[name][1]
+        expected = manifest['files'][name]
+        require(isinstance(expected, dict) and expected.get('bytes') == len(data) and
+                expected.get('sha256') == sha(data), 'Native manifest checksum mismatch: ' + name)
+    runtime = json.loads(archive['KorgResources.bundle/manifest.json'][1])
+    require(runtime.get('name') == 'KorgOriginalRuntime' and runtime.get('version') == '0.2.0',
+            'Unexpected runtime manifest identity')
+    require(runtime.get('thirdPartyPluginsBundled') is False and runtime.get('runtimeDependenciesBundled') == [],
+            'Runtime must not bundle third-party plugins or runtime dependencies')
+    loader = archive['KorgLoader.dylib'][1]
+    for offset, size in slices(loader):
+        header = parse(loader[offset:offset + size])
+        require(header['cpu'] == ARM64 and header['filetype'] == 6, 'Loader must be arm64 MH_DYLIB')
+        for command in header['commands']:
+            if command['cmd'] in DYLIBS:
+                dep = command['name']
+                require(dep.startswith(('/System/Library/', '/usr/lib/')) and '..' not in dep.split('/'),
+                        'Loader dependency is not an Apple system library: ' + dep)
+            if command['cmd'] == 0x8000001C:
+                require(command['name'].startswith('@loader_path/'), 'Loader has an unsafe runpath')
+    return archive, manifest
 
 
 def validate_dependencies(entries, app):
@@ -306,17 +247,16 @@ def validate_dependencies(entries, app):
         executable = containers[max(owners, key=len)]
         inherited = []
         if executable in binaries:
-            for o, n in slices(entries[executable][1]):
-                inherited.extend(c['name'] for c in parse(entries[executable][1][o:o + n])['commands'] if c['cmd'] == 0x8000001C)
-        report[binary] = library_commands(entries[binary][1])
+            inherited = [c['name'] for o, n in slices(entries[executable][1])
+                         for c in parse(entries[executable][1][o:o + n])['commands'] if c['cmd'] == 0x8000001C]
+        commands_by_arch = []
         for o, n in slices(entries[binary][1]):
             header = parse(entries[binary][1][o:o + n])
+            libs = [c['name'] for c in header['commands'] if c['cmd'] in DYLIBS]
+            commands_by_arch.append({'cpu': header['cpu'], 'libraries': libs})
             paths = [(c['name'], binary) for c in header['commands'] if c['cmd'] == 0x8000001C]
             paths += [(path, executable) for path in inherited]
-            for command in header['commands']:
-                if command['cmd'] not in DYLIBS:
-                    continue
-                dep = command['name']
+            for dep in libs:
                 require(system(dep) or dep.startswith(('@loader_path/', '@executable_path/', '@rpath/')),
                         f'Unresolved/unsafe dependency in {binary}: {dep}')
                 candidates = [resolve(dep, binary, executable)]
@@ -325,15 +265,23 @@ def validate_dependencies(entries, app):
                 require(any(system(candidate) or (posixpath.normpath(candidate) in binaries and
                             posixpath.normpath(candidate).startswith(app + '/')) for candidate in candidates),
                         f'Unresolved/unsafe dependency in {binary}: {dep}')
+        report[binary] = commands_by_arch
     return report
 
 
-def package(ipa, loader_zip, output, hook_runtime=None, hook_license=None):
+def package(ipa, loader_zip, output, expected_loader_sha256=None):
     ipa, loader_zip, output = Path(ipa), Path(loader_zip), Path(output)
     report_path = output.with_suffix('.inspection.json')
-    inputs = [ipa, loader_zip] + [Path(p) for p in (hook_runtime, hook_license) if p]
-    require(output.resolve() != report_path.resolve() and all(p.resolve() not in (output.resolve(), report_path.resolve()) for p in inputs), 'Output must not overwrite an input')
-    require(not output.exists() and not report_path.exists() and not output.is_symlink() and not report_path.is_symlink(), 'Output already exists')
+    require(output.resolve() != report_path.resolve() and
+            all(p.resolve() not in (output.resolve(), report_path.resolve()) for p in (ipa, loader_zip)),
+            'Output must not overwrite an input')
+    require(not output.exists() and not report_path.exists() and not output.is_symlink() and not report_path.is_symlink(),
+            'Output already exists')
+    native, manifest = verified_loader(loader_zip)
+    with loader_zip.open('rb') as handle:
+        artifact_sha = hashlib.file_digest(handle, 'sha256').hexdigest()
+    if expected_loader_sha256 is not None:
+        require(artifact_sha == expected_loader_sha256, 'Native archive does not match trusted build digest')
     entries = read_zip(ipa)
     roots = {name.split('/')[1] for name in entries if name.startswith('Payload/') and len(name.split('/')) > 1}
     require(len(roots) == 1 and next(iter(roots)).endswith('.app'), 'Expected a single Payload app')
@@ -341,38 +289,33 @@ def package(ipa, loader_zip, output, hook_runtime=None, hook_license=None):
     info_name = app + '/Info.plist'
     require(info_name in entries, 'Missing app Info.plist')
     info = plistlib.loads(entries[info_name][1])
-    require(str(info.get('CFBundleShortVersionString', '')).split('.')[0] == '352', 'Expected Discord version 352')
-    executable = info.get('CFBundleExecutable')
-    require(isinstance(executable, str) and executable not in ('', '.', '..') and '/' not in executable, 'Invalid main executable name')
-    executable = app + '/' + executable
+    require(info.get('CFBundleIdentifier') == 'com.hammerandchisel.discord', 'Unexpected Discord bundle identifier')
+    require(str(info.get('CFBundleShortVersionString', '')).split('.')[0] == '353', 'Expected Discord version 353')
+    executable_name = info.get('CFBundleExecutable')
+    require(isinstance(executable_name, str) and executable_name not in ('', '.', '..') and '/' not in executable_name,
+            'Invalid main executable name')
+    executable = app + '/' + executable_name
     require(executable in entries, 'Missing main executable')
     original = entries[executable][1]
-    require(original[:4] in MAGICS and parse(original)['wide'] and parse(original)['cpu'] == ARM64 and parse(original)['filetype'] == 2, 'Main executable must be thin arm64 MH_EXECUTE')
-    native, manifest = verified_loader(loader_zip)
-    loader = native['RainTweak.dylib'][1]
-    require(all(parse(loader[o:o + n])['cpu'] == ARM64 and parse(loader[o:o + n])['filetype'] == 6 for o, n in slices(loader)), 'Loader must be arm64 MH_DYLIB')
-    substrate = any('CydiaSubstrate' in dep for arch in library_commands(loader) for dep in arch['libraries'])
-    require(bool(hook_runtime) == bool(hook_license), 'Supply both --hook-runtime and --hook-license')
-    require(not substrate or hook_runtime, 'CydiaSubstrate loader requires --hook-runtime and --hook-license')
-    require(not hook_runtime or substrate, 'Hook supplied but loader has no CydiaSubstrate dependency')
-    removed = sorted(name for name in entries if not (name == 'Payload' or name == app or name.startswith(app + '/')) or
-                     '_CodeSignature' in name.split('/') or name.endswith('/embedded.mobileprovision') or name == app + '/VoiceMenu.dylib')
-    require(app + '/VoiceMenu.dylib' in entries, 'Missing expected VoiceMenu.dylib file')
-    # Check even binaries about to be removed; never accept encrypted slices.
+    require(original[:4] in MAGICS and parse(original)['wide'] and parse(original)['cpu'] == ARM64 and
+            parse(original)['filetype'] == 2, 'Main executable must be thin arm64 MH_EXECUTE')
+
+    # Inspect every app image, including known old files which will be removed.
     for name, (_, data) in entries.items():
         if name.startswith(app + '/') and is_macho(data):
             for offset, size in slices(data):
                 parse(data[offset:offset + size])
     before = {name: sha(data) for name, (_, data) in entries.items() if data is not None}
+    removed = sorted(name for name in entries if '_CodeSignature' in name.split('/') or
+                     name.endswith('/embedded.mobileprovision') or is_known_old_file(name, app))
     for name in removed:
         del entries[name]
     changed = set(removed)
 
     def put(name, data, template=None, executable_mode=False):
         require(name not in entries or name in changed, 'Refusing to replace existing app resource: ' + name)
-        require(all(parent not in entries or entries[parent][1] is None for parent in
-                    (str(p) for p in PurePosixPath(name).parents if str(p) != '.')),
-                'Injected path collides with an existing file')
+        for parent in (str(p) for p in PurePosixPath(name).parents if str(p) != '.'):
+            require(parent not in entries or entries[parent][1] is None, 'Injected path collides with an existing file')
         metadata = copy.copy(template) if template else zipfile.ZipInfo(name)
         metadata.filename = name
         if template is None:
@@ -390,31 +333,23 @@ def package(ipa, loader_zip, output, hook_runtime=None, hook_license=None):
     info['CFBundleDisplayName'] = info['CFBundleName'] = 'Korg'
     changed.add(info_name)
     put(info_name, plistlib.dumps(info, fmt=plistlib.FMT_BINARY), entries[info_name][0])
-    put(app + '/Frameworks/RainTweak.dylib', rewrite(loader, hook=substrate), executable_mode=True)
-    for name, (metadata, data) in native.items():
-        if name.startswith('BunnyResources.bundle/'):
-            put(app + '/' + name, data, metadata)
-    distribution = app + '/BunnyResources.bundle/KorgDistribution/'
-    for source, destination in [('korg-loader-source.tar.gz', 'loader-source.tar.gz'), ('LICENSE.RainTweak', 'LICENSE.RainTweak'), ('NATIVE-NOTICE.md', 'NATIVE-NOTICE.md')]:
-        put(distribution + destination, native[source][1], native[source][0])
-    put(distribution + 'manifest.json', (json.dumps(manifest, indent=2) + '\n').encode())
-    hook_report = None
-    if hook_runtime:
-        runtime, license_data = Path(hook_runtime).read_bytes(), Path(hook_license).read_bytes()
-        require(license_data.strip(), 'Hook license is empty')
-        require(all(parse(runtime[o:o + n])['cpu'] == ARM64 and parse(runtime[o:o + n])['filetype'] == 6 for o, n in slices(runtime)), 'Hook must be arm64 MH_DYLIB')
-        require(all(exports_hook(runtime[o:o + n]) for o, n in slices(runtime)), 'Hook runtime does not export MSHookMessageEx in every slice')
-        put(app + '/Frameworks/libellekit.dylib', rewrite(runtime), executable_mode=True)
-        put(distribution + 'LICENSE.hook-runtime', license_data)
-        hook_report = {'sha256': sha(runtime), 'licenseSha256': sha(license_data)}
+    put(app + '/Frameworks/KorgLoader.dylib', rewrite(native['KorgLoader.dylib'][1]), executable_mode=True)
+    for name in ('KorgResources.bundle/korg.js', 'KorgResources.bundle/manifest.json'):
+        put(app + '/' + name, native[name][1])
+    put(app + '/KorgResources.bundle/Source/korg-source.tar.gz', native['korg-source.tar.gz'][1])
+    put(app + '/KorgResources.bundle/Source/SOURCE-NOTICE.md', native['SOURCE-NOTICE.md'][1])
+
     libraries = validate_dependencies(entries, app)
-    require(all(name in changed or sha(data) == before[name] for name, (_, data) in entries.items() if data is not None and name in before), 'Original resource changed unexpectedly')
+    require(all(name in changed or sha(data) == before[name] for name, (_, data) in entries.items()
+                if data is not None and name in before), 'Original resource changed unexpectedly')
     with ipa.open('rb') as handle:
         input_sha = hashlib.file_digest(handle, 'sha256').hexdigest()
-    report = dict(inputSha256=input_sha, nativeManifest=manifest, hookRuntime=hook_report,
+    report = dict(inputSha256=input_sha, nativeArchiveSha256=artifact_sha, nativeManifest=manifest,
                   removed=removed, modifiedOrAdded=sorted(changed - set(removed)), libraryCommands=libraries,
                   preservedBundleIdentifier=info.get('CFBundleIdentifier'),
-                  status='Unsigned; signer must sign app, nested extensions and libraries and manage entitlements/App Groups. Physical iPhone runtime unverified.')
+                  preservedDiscordVersion=info.get('CFBundleShortVersionString'),
+                  thirdPartyPluginsBundled=False, runtimeDependenciesBundled=[],
+                  status='Unsigned; signer must sign the app, nested extensions and libraries. Physical iPhone runtime unverified.')
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
@@ -435,18 +370,23 @@ def package(ipa, loader_zip, output, hook_runtime=None, hook_license=None):
     return report
 
 
+def is_known_old_file(name, app):
+    relative = name[len(app) + 1:] if name.startswith(app + '/') else ''
+    lower = relative.lower()
+    return (lower in ('voicemenu.dylib', 'frameworks/raintweak.dylib', 'frameworks/libellekit.dylib') or
+            lower == 'bunnyresources.bundle' or lower.startswith('bunnyresources.bundle/'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for flag in ('ipa', 'loader-zip', 'output'):
-        parser.add_argument('--' + flag, required=True, type=Path)
-    parser.add_argument('--hook-runtime', type=Path)
-    parser.add_argument('--hook-license', type=Path)
-    parser.add_argument('--expected-loader-sha256', default='c34975ebac1e1465eaa85f37a40f029fe7075de0cc12c65aba4a8304d0e0a3c3',
-                        help='Trusted SHA-256 of the Korg 0.2 native artifact; defaults to the verified GitHub build')
+    parser.add_argument('--ipa', required=True, type=Path)
+    parser.add_argument('--loader-zip', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--expected-loader-sha256', required=True,
+                        help='Trusted SHA-256 of the complete native artifact ZIP')
     args = parser.parse_args()
     try:
-        require(sha(args.loader_zip.read_bytes()) == args.expected_loader_sha256, 'Native archive does not match trusted build digest')
-        report = package(args.ipa, args.loader_zip, args.output, args.hook_runtime, args.hook_license)
+        report = package(args.ipa, args.loader_zip, args.output, args.expected_loader_sha256)
     except (ValueError, KeyError, OSError, struct.error, zipfile.BadZipFile) as error:
         parser.exit(1, f'Packaging refused: {error}\n')
     print(json.dumps(report, indent=2))

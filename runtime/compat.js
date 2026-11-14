@@ -42,10 +42,6 @@
             storage,
             ui: { components: uiComponents },
             plugin: { id: owner },
-            component: { View: uiComponents.View, Text: uiComponents.Text, Switch: uiComponents.Switch, Pressable: uiComponents.Pressable, TextInput: uiComponents.TextInput, ScrollView: uiComponents.ScrollView },
-            assets: {},
-            useProxy: () => ({ instead: (target, property, callback) => patcher.instead(property, target, callback), after: (target, property, callback) => patcher.after(property, target, callback), before: (target, property, callback) => patcher.before(property, target, callback) }),
-            plugin: { id: owner },
             unpatchAll: patcher.unpatchAll,
         };
         Object.defineProperty(api, "AsyncStorage", { enumerable: true, get: () => storage.AsyncStorage });

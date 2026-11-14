@@ -262,9 +262,10 @@ test("UI waits for Metro host modules, attaches before registration, and rerende
     for (const listener of listeners) listener();
     assert.equal(f.K.runtime?.ui?.attached, undefined);
     const provider = Native.AppRegistry.registerComponent("Root", () => function Root() {});
-    assert.equal(typeof provider, "object");
-    assert.equal(typeof provider.type, "function");
-    provider.type(provider.props);
+    assert.equal(typeof provider, "function");
+    const overlay = provider({});
+    assert.equal(overlay.type.name, "Overlay");
+    overlay.type(overlay.props);
     assert.deepEqual(calls, ["Root"]);
     await Promise.resolve();
     await Promise.resolve();
