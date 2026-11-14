@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-palette="graphite">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#171A1D">
+  <meta name="color-scheme" content="dark light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="description" content="Original Korg settings design preview. Six local palettes and a metadata-only URL demo. No Discord connection.">
+  <title>Korg · Local design preview</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main class="phone">
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="Korg settings"><img src="./icon.svg" width="34" height="34" alt=""><span>Korg</span></a>
+      <span class="badge">LOCAL PREVIEW</span>
+    </header>
+    <section class="hero" id="top" aria-labelledby="title">
+      <p class="eyebrow">A SPACE OF YOUR OWN</p>
+      <h1 id="title">Small controls.<br><span>Your colors.</span></h1>
+      <p>An original settings design for Korg.<br>No account. No Discord connection.</p>
+      <div class="facts"><span><b>9</b> core modules</span><span><b>6</b> own palettes</span><span><b>0</b> bundled plugins</span></div>
+    </section>
+    <section class="card" aria-labelledby="appearance-title">
+      <div class="section-heading"><h2 id="appearance-title">Appearance</h2><span class="tag">KORG CONTROLS</span></div>
+      <p class="hint">Colors for Korg's settings, not full Discord themes.</p>
+      <fieldset><legend class="sr-only">Choose a local palette</legend><div id="palettes" class="palettes"></div></fieldset>
+      <div class="sample"><span class="sample-mark" aria-hidden="true">K</span><div><strong id="palette-name">Graphite</strong><small>Your settings, in this palette</small></div><span class="sample-dot" aria-hidden="true"></span></div>
+      <p id="palette-status" class="hint" role="status">Palette changes stay in this browser.</p>
+    </section>
+    <section class="card" aria-labelledby="plugins-title">
+      <div class="section-heading"><h2 id="plugins-title">URL demo</h2><span id="entry-count" class="tag">0 ENTRIES</span></div>
+      <p class="hint" id="url-help">Metadata only. Nothing is downloaded, installed or executed. Entries clear on reload.</p>
+      <form id="url-form" aria-describedby="url-help">
+        <label for="plugin-url">HTTPS address</label>
+        <input id="plugin-url" name="url" type="url" maxlength="2048" placeholder="https://example.test/plugin.js" autocomplete="off" spellcheck="false" required>
+        <label for="url-kind">Address type</label>
+        <div class="form-row"><select id="url-kind" name="kind"><option value="bundle">JavaScript bundle URL</option><option value="manifest">JSON manifest URL</option></select><button type="submit">Add demo</button></div>
+      </form>
+      <p id="url-status" class="hint" role="status" aria-live="polite"></p>
+      <p id="empty" class="empty">Nothing bundled.<br><small>Add an address to try the list layout.</small></p>
+      <ul id="entries" class="entries" aria-label="Metadata-only demo entries"></ul>
+    </section>
+    <aside class="note"><strong>Design, not a device test.</strong><p>The actual runtime has an explicit HTTPS plugin loader and a partial Vendetta/Bunny adapter. This page demonstrates the controls only. Native build, signing and iPhone verification remain separate.</p></aside>
+    <footer>Independently authored Korg · Original files MIT-0<br>Historical and host licenses remain applicable.</footer>
+    <noscript><p class="note">Enable JavaScript for the local palette and metadata controls. This page never connects to Discord.</p></noscript>
+  </main>
+</body>
+</html>

@@ -1,0 +1,66 @@
+name: Build Korg loader
+
+on:
+  push:
+    branches: [main, 'maipa-g/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: korg-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  loader:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out Korg
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Check toolchain
+        run: |
+          node --version
+          python3 --version
+          xcodebuild -version
+
+      - name: Build and verify local runtime
+        run: |
+          npm run build
+          npm run verify
+          npm test
+          python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Compile and collect native loader
+        run: |
+          mkdir -p .build/native
+          set -o pipefail
+          bash scripts/build-native.sh 2>&1 | tee .build/native/native-build.log
+
+      - name: Upload native diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-native-diagnostics
+          path: .build/native/native-build.log
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Verify collected artifact
+        run: |
+          npm run verify
+          npm test
+
+      - name: Upload loader, resources, source, and licenses
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-original-loader-components
+          path: artifacts/native/
+          if-no-files-found: error
+          retention-days: 14
