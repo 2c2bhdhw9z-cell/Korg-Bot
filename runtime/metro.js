@@ -5,7 +5,7 @@
     const notifying = new Set();
     const wrappers = new WeakMap();
     const factories = new WeakMap();
-    let hooked = false;
+    const hooks = new Map();
     let lastError;
     let scanning = false;
     const looksLikeExports = value => value !== null && (typeof value === "object" || typeof value === "function");
@@ -66,9 +66,15 @@
         if (!byName) wrappers.set(value, byName = new Map());
         if (byName.has(name)) return byName.get(name);
         const wrapped = function (...args) {
+            hookGlobal("__d");
+            hookGlobal("__r");
             if (name === "__d" && typeof args[0] === "function") args[0] = wrapFactory(args[0]);
             const result = value.apply(this, args);
-            if (name === "__r") captureModule(result);
+            if (name === "__r") {
+                record(result);
+                notify(result);
+            }
+            if (K.reportStatus) K.reportStatus();
             return result;
         };
         byName.set(name, wrapped);
@@ -87,6 +93,7 @@
     function hookGlobal(name) {
         try {
             const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+            if (descriptor && hooks.has(name) && descriptor.get === hooks.get(name)) return true;
             if (descriptor && descriptor.configurable === false) return false;
             let current = descriptor && "value" in descriptor ? descriptor.value : undefined;
             const getter = function () {
@@ -103,6 +110,7 @@
                     } else current = value;
                 },
             });
+            hooks.set(name, getter);
             return true;
         } catch (error) {
             lastError = error;
@@ -123,11 +131,9 @@
         finally { scanning = false; }
     }
     function install() {
-        if (!hooked) {
-            hooked = true;
-            hookGlobal("__d");
-            hookGlobal("__r");
-        }
+        // Metro may replace configurable accessors with defineProperty during startup.
+        hookGlobal("__d");
+        hookGlobal("__r");
         scan();
     }
     function getAll() {
@@ -183,6 +189,20 @@
             },
         });
     }
-    K.metro = { install, refresh: getAll, getAll, find, findByProps, findByName, findByStoreName, common, subscribe, get lastError() { return lastError; } };
+    function status() {
+        const active = {};
+        for (const name of ["__d", "__r"]) {
+            const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+            active[name] = Boolean(descriptor && hooks.has(name) && descriptor.get === hooks.get(name));
+        }
+        return { moduleCount: records.size, hooks: active, error: lastError ? String(lastError.message || lastError) : null };
+    }
+    K.reportStatus = function () {
+        const snapshot = { metro: status(), ui: K.ui && K.ui.status ? K.ui.status() : { phase: "waiting" } };
+        globalThis.__KORG_DIAGNOSTICS__ = snapshot;
+        return snapshot;
+    };
+    K.metro = { status, install, refresh: getAll, getAll, find, findByProps, findByName, findByStoreName, common, subscribe, get lastError() { return lastError; } };
     install();
+    K.reportStatus();
 })(globalThis.__KORG_INTERNAL__);

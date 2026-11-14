@@ -57,8 +57,103 @@ void evaluate(void *runtime, const std::string &source) {
 
 #ifndef KORG_ABI_TEST
 #import <Foundation/Foundation.h>
-#import <objc/runtime.h>
+#import <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
+
+// Objective-C declarations must remain at global scope.
+static NSLock *diagnosticLock;
+static NSMutableDictionary *diagnosticState;
+static id activeObserver;
+static void report(NSString *phase, NSString *value) {
+  [diagnosticLock lock];
+  diagnosticState[phase] = value;
+  [[NSUserDefaults standardUserDefaults] setObject:[diagnosticState copy]
+                                           forKey:@"KorgOriginalDiagnostics"];
+  [diagnosticLock unlock];
+}
+static NSString *diagnostics() {
+  [diagnosticLock lock];
+  NSDictionary *state = [diagnosticState copy];
+  [diagnosticLock unlock];
+  NSMutableString *text = [NSMutableString stringWithString:
+      @"Korg UI is a floating control; not yet a Discord settings row\n\n"];
+  for (NSString *key in @[@"constructor", @"identity", @"hook", @"callbacks",
+                          @"resource", @"evaluation", @"last error"])
+    [text appendFormat:@"%@: %@\n", key, state[key] ?: @"pending"];
+  return text;
+}
+@interface KorgDiagnosticWindow : UIWindow
+@property(nonatomic, strong) UIButton *control;
+@end
+@implementation KorgDiagnosticWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+  if (self.rootViewController.presentedViewController)
+    return [super hitTest:point withEvent:event];
+  CGPoint local = [self.control convertPoint:point fromView:self];
+  return [self.control pointInside:local withEvent:event]
+      ? [super hitTest:point withEvent:event] : nil;
+}
+@end
+@interface KorgDiagnosticController : UIViewController
+@end
+@implementation KorgDiagnosticController
+- (void)viewDidLayoutSubviews {
+  [super viewDidLayoutSubviews];
+  KorgDiagnosticWindow *window = (KorgDiagnosticWindow *)self.view.window;
+  UIEdgeInsets safe = self.view.safeAreaInsets;
+  window.control.frame = CGRectMake(self.view.bounds.size.width - safe.right - 74,
+                                    safe.top + 56, 64, 44);
+}
+- (void)showDiagnostics {
+  if (self.presentedViewController) return;
+  NSString *text = diagnostics();
+  UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Korg diagnostics"
+      message:text preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Copy diagnostics"
+      style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [UIPasteboard generalPasteboard].string = text;
+      }]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Close"
+      style:UIAlertActionStyleCancel handler:nil]];
+  [self presentViewController:alert animated:YES completion:nil];
+}
+@end
+static KorgDiagnosticWindow *diagnosticWindow;
+static void showControl(unsigned attempt) {
+  UIWindowScene *scene = nil;
+  for (UIScene *candidate in [UIApplication sharedApplication].connectedScenes)
+    if ([candidate isKindOfClass:[UIWindowScene class]] &&
+        candidate.activationState == UISceneActivationStateForegroundActive) {
+      scene = (UIWindowScene *)candidate;
+      break;
+    }
+  if (!scene) {
+    if (attempt < 100) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+        dispatch_get_main_queue(), ^{ showControl(attempt + 1); });
+    return;
+  }
+  if (diagnosticWindow.windowScene == scene) { diagnosticWindow.hidden = NO; return; }
+  diagnosticWindow.hidden = YES;
+  diagnosticWindow = [[KorgDiagnosticWindow alloc] initWithWindowScene:scene];
+  diagnosticWindow.frame = scene.coordinateSpace.bounds;
+  diagnosticWindow.windowLevel = UIWindowLevelAlert + 1;
+  diagnosticWindow.backgroundColor = UIColor.clearColor;
+  KorgDiagnosticController *controller = [KorgDiagnosticController new];
+  diagnosticWindow.rootViewController = controller;
+  controller.view.backgroundColor = UIColor.clearColor;
+  UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+  [button setTitle:@"Korg" forState:UIControlStateNormal];
+  button.accessibilityLabel = @"Korg diagnostics";
+  button.backgroundColor = UIColor.secondarySystemBackgroundColor;
+  button.layer.cornerRadius = 12;
+  [button addTarget:controller action:@selector(showDiagnostics)
+      forControlEvents:UIControlEventTouchUpInside];
+  diagnosticWindow.control = button;
+  [controller.view addSubview:button];
+  diagnosticWindow.hidden = NO;
+  [controller.view setNeedsLayout];
+}
+#import <objc/runtime.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <atomic>
@@ -74,20 +169,22 @@ std::atomic<bool> installed{false};
 std::mutex installation;
 
 void inject(void *runtime) {
-  if (!runtime) return;
+  if (!runtime) { report(@"evaluation", @"No runtime supplied"); return; }
   @autoreleasepool {
     NSString *file = [[[NSBundle mainBundle] bundlePath]
         stringByAppendingPathComponent:@"KorgResources.bundle/korg.js"];
     NSError *error = nil;
     NSData *data = [NSData dataWithContentsOfFile:file options:0 error:&error];
     if (!data || !data.length || data.length > 32 * 1024 * 1024) {
-      NSLog(@"[Korg] Missing, empty, or oversized embedded script: %@", error);
+      report(@"resource", @"Missing, empty, or oversized script");
       return;
     }
     if (![[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]) {
-      NSLog(@"[Korg] Embedded script must be UTF-8 JavaScript source");
+      report(@"resource", @"Script is not UTF-8");
       return;
     }
+    report(@"resource", @"Embedded script loaded");
+    report(@"evaluation", @"Evaluating on runtime callback thread");
     // The function body isolates local declarations; void forces undefined.
     // The runtime owns storage and UI integration through the host's modules.
     std::string source =
@@ -99,25 +196,34 @@ void inject(void *runtime) {
         "log:function(){if(globalThis.console)console.log.apply(console,arguments)}"
         "}),configurable:false,writable:false});\n";
     source.append(static_cast<const char *>(data.bytes), data.length);
-    source.append("\n}();\n");
+    source.append("\ntry { if(globalThis.console) console.log('[Korg] native probe',"
+                  "typeof globalThis.__KORG_INTERNAL__?.ui?.status,"
+                  "typeof globalThis.__KORG_DIAGNOSTICS__); } catch (_) {}\n}();\n");
     korg::evaluate(runtime, source);
-    NSLog(@"[Korg] Embedded bootstrap evaluated on the host runtime thread");
+    report(@"evaluation", @"Bootstrap evaluation returned; UI attachment unverified");
   }
 }
 
 void initialized(id host, SEL selector, id instance, void *runtime) {
+  [diagnosticLock lock];
+  diagnosticState[@"callbacks"] = @([diagnosticState[@"callbacks"] unsignedLongLongValue] + 1);
+  [diagnosticLock unlock];
+  report(@"evaluation", @"Runtime callback received");
   // Do not dispatch runtime work: this callback already owns the JS thread.
   // Install Metro setters before the host delegate can start its application.
   try {
     @try {
       inject(runtime);
     } @catch (NSException *error) {
-      NSLog(@"[Korg] Bootstrap Objective-C exception: %@", error.reason);
+      report(@"evaluation", @"Bootstrap failed");
+      report(@"last error", @"Objective-C exception during bootstrap (details redacted)");
     }
   } catch (const std::exception &error) {
-    NSLog(@"[Korg] Bootstrap C++ exception: %s", error.what());
+    report(@"evaluation", @"Bootstrap failed");
+    report(@"last error", @"C++ exception during bootstrap (details redacted)");
   } catch (...) {
-    NSLog(@"[Korg] Bootstrap failed with an unknown C++ exception");
+    report(@"evaluation", @"Bootstrap failed");
+    report(@"last error", @"Unknown C++ exception during bootstrap");
   }
   // Injection failure must not suppress the host's initialization callback.
   auto original = previous.load(std::memory_order_acquire);
@@ -129,8 +235,9 @@ bool compatible(Method method) {
   char *result = method_copyReturnType(method);
   char *instance = method_copyArgumentType(method, 2);
   char *runtime = method_copyArgumentType(method, 3);
-  bool valid = result && result[0] == 'v' && instance && instance[0] == '@' &&
-      runtime && runtime[0] == '^';
+  bool valid = result && std::strcmp(result, "v") == 0 && instance &&
+      std::strcmp(instance, "@") == 0 && runtime && runtime[0] == '^' &&
+      std::strstr(runtime, "Runtime") != nullptr;
   free(result);
   free(instance);
   free(runtime);
@@ -143,9 +250,9 @@ bool install() {
   Class host = objc_lookUpClass("RCTHost");
   SEL selector = sel_registerName("instance:didInitializeRuntime:");
   Method method = host ? class_getInstanceMethod(host, selector) : nullptr;
-  if (!method) return false;
+  if (!method) { report(@"hook", @"Waiting for RCTHost callback method"); return false; }
   if (!compatible(method)) {
-    NSLog(@"[Korg] Refusing an incompatible RCTHost callback signature");
+    report(@"hook", @"Refused incompatible RCTHost callback signature");
     return false;
   }
   IMP replacement = reinterpret_cast<IMP>(&initialized);
@@ -158,14 +265,14 @@ bool install() {
     previous.store(reinterpret_cast<Initialized>(displaced), std::memory_order_release);
   }
   installed.store(true, std::memory_order_release);
-  NSLog(@"[Korg] Installed original RCTHost runtime observer");
+  report(@"hook", @"Original RCTHost runtime observer installed");
   return true;
 }
 
 void retry(unsigned attempt) {
   if (install()) return;
   if (attempt == 200) {
-    NSLog(@"[Korg] RCTHost unavailable after 20s; future image loads will retry");
+    report(@"hook", @"Not installed after 20s; future image loads will retry");
     return;
   }
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
@@ -180,11 +287,26 @@ void imageAdded(const struct mach_header *, intptr_t) {
 
 __attribute__((constructor)) void start() {
   @autoreleasepool {
+    diagnosticLock = [NSLock new];
+    // Replace the persisted snapshot: previous launches must not look current.
+    diagnosticState = [@{@"constructor": @"Loaded this session", @"identity": @"Checking",
+        @"hook": @"Pending", @"callbacks": @0, @"resource": @"Not requested",
+        @"evaluation": @"Not started", @"last error": @"None"} mutableCopy];
+    report(@"constructor", @"Loaded this session");
     // Match the executable as well as the ID: IPA signers may change the ID.
     NSBundle *bundle = [NSBundle mainBundle];
     bool discord = [[bundle bundleIdentifier] isEqualToString:@"com.hammerandchisel.discord"] ||
         [[bundle objectForInfoDictionaryKey:@"CFBundleExecutable"] isEqualToString:@"Discord"];
+    report(@"identity", discord ? @"Discord identity accepted" : @"Identity rejected");
     if (!discord) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      activeObserver = [[NSNotificationCenter defaultCenter]
+          addObserverForName:UIApplicationDidBecomeActiveNotification object:nil
+          queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *notification) {
+            showControl(0);
+          }];
+      showControl(0);
+    });
     install();
     _dyld_register_func_for_add_image(&imageAdded);
     dispatch_async(dispatch_get_main_queue(), ^{ retry(0); });

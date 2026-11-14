@@ -471,3 +471,24 @@ test("runtime boot captures AppRegistry before registration and UI survives late
     await K.runtime.boot;
     assert.equal(K.runtime.ready, true);
 });
+
+test("release require captures returned exports without getModules and repairs replaced hooks", async () => {
+    const exports = { releaseOnly: true };
+    let getterCalls = 0;
+    Object.defineProperty(exports, "danger", { get() { getterCalls++; throw Error("must stay lazy"); } });
+    const { K, context } = await runtime({ __r: () => exports });
+    const seen = [];
+    K.metro.subscribe(value => seen.push(value));
+    assert.equal(context.__r(), exports);
+    assert.equal(K.metro.findByProps("releaseOnly"), exports);
+    assert.equal(seen[0], exports);
+    assert.equal(getterCalls, 0);
+    vm.runInContext('Object.defineProperty(globalThis, "__r", { configurable: true, writable: true, value: () => ({ replaced: true }) })', context);
+    assert.equal(K.metro.status().hooks.__r, false);
+    K.metro.install();
+    assert.equal(context.__r().replaced, true);
+    assert.equal(K.metro.findByProps("replaced").replaced, true);
+    assert.equal(K.metro.status().hooks.__r, true);
+    assert.ok(K.reportStatus().metro.moduleCount > 0);
+    assert.equal(context.__KORG_DIAGNOSTICS__.metro.hooks.__r, true);
+});

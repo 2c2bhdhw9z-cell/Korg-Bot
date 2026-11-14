@@ -15,14 +15,26 @@
     let loading;
     let backendWasAvailable = false;
     const subscribers = new Set();
-    const hostState = { attached: false, reason: "Waiting for React Native application registry" };
+    const hostState = { attached: false, phase: "waiting", rootWrapped: false, reason: "Waiting for React Native application registry" };
+    function status() { return { ...hostState }; }
+    function report() {
+        if (K.runtime && K.runtime.ui) Object.assign(K.runtime.ui, hostState);
+        if (K.reportStatus) K.reportStatus();
+    }
     const state = { visible: false, url: "", kind: "bundle", notice: "", plugins: [], theme: "graphite", busy: false, settingsId: null };
 
     function hostModule(name, common, required) {
         const supplied = K.ui && K.ui.modules && K.ui.modules[name];
         if (supplied) return supplied;
-        try { if (K.metro && K.metro.common && K.metro.common[common]) return K.metro.common[common]; } catch { /* Not captured yet. */ }
-        if (globalThis[common]) return globalThis[common];
+        try {
+            const found = K.metro && K.metro.findByProps && K.metro.findByProps(...required);
+            if (found) return found;
+        } catch { /* Not captured yet. */ }
+        try {
+            const found = K.metro && K.metro.common && K.metro.common[common];
+            if (found && required.every(key => key in Object(found))) return found;
+        } catch { /* Not captured yet. */ }
+        if (globalThis[common] && required.every(key => key in Object(globalThis[common]))) return globalThis[common];
         try { return K.metro && K.metro.findByProps(...required); } catch { return undefined; }
     }
     function update(values) {
@@ -129,7 +141,16 @@
         attaching = true;
         try {
             const resolvedReact = hostModule("react", "React", ["createElement", "useState", "useEffect"]);
-            const resolvedNative = hostModule("react-native", "ReactNative", ["View", "Text", "AppRegistry"]);
+            let resolvedNative = hostModule("react-native", "ReactNative", ["View", "Text", "AppRegistry"]);
+            if (!resolvedNative && K.metro && K.metro.findByProps) {
+                const primitives = K.metro.findByProps("View", "Text");
+                const registry = K.metro.findByProps("registerComponent", "getAppKeys");
+                if (primitives && registry) {
+                    // Delegate to live host exports; do not enumerate RN's lazy getters.
+                    resolvedNative = Object.create(primitives);
+                    Object.defineProperty(resolvedNative, "AppRegistry", { value: registry });
+                }
+            }
             if (resolvedReact) React = resolvedReact;
             if (resolvedNative) Native = resolvedNative;
             const registry = Native && Native.AppRegistry;
@@ -142,6 +163,8 @@
                 if (typeof provider !== "function" || args[0] === "KorgRuntimeUI") return;
                 args[1] = function (...providerArgs) {
                     const Component = provider.apply(this, providerArgs);
+                    Object.assign(hostState, { phase: "registered", rootWrapped: true });
+                    report();
                     function KorgOverlay(props) {
                         // React can arrive after AppRegistry. Resolve again when the host renders.
                         attach();
@@ -152,8 +175,8 @@
                 };
             });
             attachedRegistry = registry;
-            Object.assign(hostState, { attached: true, reason: null });
-            if (K.runtime && K.runtime.ui) Object.assign(K.runtime.ui, hostState);
+            Object.assign(hostState, { attached: true, phase: hostState.rootWrapped ? "registered" : "captured", reason: null });
+            report();
             update({ plugins: K.plugins ? K.plugins.list() : [], theme: K.themes ? K.themes.current() : "graphite" });
             return true;
         } catch (error) { K.log.warn("Korg UI host attachment failed", error); return false; }
@@ -208,7 +231,7 @@
         }
         return hostState;
     }
-    K.ui = Object.assign(K.ui || {}, { initialize, retry, openSettings: open,
+    K.ui = Object.assign(K.ui || {}, { status, initialize, retry, openSettings: open,
         components: Object.assign(K.ui && K.ui.components || {}, { Text, Button }),
         showToast: message => {
             attach();

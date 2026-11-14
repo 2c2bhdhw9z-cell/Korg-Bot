@@ -273,3 +273,45 @@ test("UI waits for Metro host modules, attaches before registration, and rerende
     await f.K.themes.select("paper");
     assert.notEqual(f.K.themes.colors(), palette);
 });
+
+test("real Metro release exports select lazy full RN over partial exports and report provider use", () => {
+    for (const separateRegistry of [false, true]) {
+        const registrations = new Map();
+        const registry = {
+            registerComponent(name, provider) { registrations.set(name, provider); return name; },
+            getAppKeys() { return [...registrations.keys()]; },
+        };
+        const React = { createElement: (type, props) => ({ type, props }), useState() {}, useEffect() {} };
+        const partial = { View: "partialView", Text: "partialText" };
+        let dangerousReads = 0;
+        const native = {};
+        for (const [key, value] of Object.entries({ View: "View", Text: "Text", AppRegistry: registry })) {
+            if (separateRegistry && key === "AppRegistry") continue;
+            Object.defineProperty(native, key, { get: () => value });
+        }
+        Object.defineProperty(native, "danger", { get() { dangerousReads++; throw Error("eager RN read"); } });
+        const exports = [React, partial, native, registry];
+        const context = vm.createContext({ console, __r: id => exports[id] });
+        for (const name of ["core", "metro", "patcher", "ui"]) vm.runInContext(runtimeSources[name], context);
+        const K = context.__KORG_INTERNAL__;
+        K.ui.initialize();
+        assert.equal(K.ui.status().phase, "waiting");
+        context.__r(0);
+        context.__r(1);
+        context.__r(2);
+        if (separateRegistry) context.__r(3);
+        assert.equal(K.ui.status().phase, "captured");
+        assert.equal(K.ui.status().rootWrapped, false);
+        assert.equal(registry.registerComponent("Root", () => function Root() {}), "Root");
+        assert.equal(K.ui.status().phase, "captured");
+        const Root = registrations.get("Root")();
+        assert.equal(Root.name, "KorgOverlay");
+        assert.equal(K.ui.status().phase, "registered");
+        assert.equal(context.__KORG_DIAGNOSTICS__.ui.rootWrapped, true);
+        K.plugins = {};
+        K.themes = {};
+        assert.equal(Root({}).type.name, "Overlay");
+        assert.equal(dangerousReads, 0);
+        assert.equal(K.metro.lastError, undefined);
+    }
+});
