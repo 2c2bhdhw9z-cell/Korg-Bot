@@ -98,6 +98,11 @@ jobs:
       - name: Run Korg in the real engine
         run: |
           npm run build
+          set -o pipefail
           HERMES_SRC="$RUNNER_TEMP/hermes-src" HERMES_BUILD="$RUNNER_TEMP/hermes-build" \
             METRO_REQUIRE="$PWD/node_modules/metro-runtime/src/polyfills/require.js" \
-            node --test tests/native-hermes.test.mjs tests/hermes-semantics.test.mjs tests/hermes.test.mjs
+            node --test tests/native-hermes.test.mjs tests/hermes-semantics.test.mjs tests/hermes.test.mjs | tee "$RUNNER_TEMP/engine-test.txt"
+          # A skipped test also exits 0, so require these to have really run and passed.
+          grep -q "✔ loader core and the Korg runtime work inside a real Hermes engine" "$RUNNER_TEMP/engine-test.txt"
+          grep -q "✔ runtime sources create no closures over loop-scoped variables" "$RUNNER_TEMP/engine-test.txt"
+          grep -q "✔ the built runtime bundle compiles with Hermes" "$RUNNER_TEMP/engine-test.txt"

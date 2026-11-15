@@ -41,5 +41,6 @@ test("loader core and the Korg runtime work inside a real Hermes engine", async 
         const failures = ran.stdout.split("\n").filter(line => line.startsWith("FAIL") || line.includes("threw"));
         assert.equal(ran.status, 0, `Real-engine checks failed:\n${failures.join("\n")}\n---\n${ran.stdout.slice(-4000)}${ran.stderr}`);
         assert.match(ran.stdout, /ALL PASSED/);
+        t.diagnostic(ran.stdout.split("\n").filter(line => /^(ok|info|ALL)/.test(line)).join("\n"));
     } finally { await rm(temp, { recursive: true, force: true }); }
 });
