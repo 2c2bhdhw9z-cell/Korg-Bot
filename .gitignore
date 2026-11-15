@@ -1,0 +1,10 @@
+node_modules/
+.build/
+dist/
+artifacts/
+.DS_Store
+*.ipa
+*.mobileprovision
+*.p12
+__pycache__/
+*.pyc
