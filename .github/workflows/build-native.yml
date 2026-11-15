@@ -97,12 +97,26 @@ jobs:
 
       - name: Run Korg in the real engine
         run: |
-          npm run build
           set -o pipefail
-          HERMES_SRC="$RUNNER_TEMP/hermes-src" HERMES_BUILD="$RUNNER_TEMP/hermes-build" \
-            METRO_REQUIRE="$PWD/node_modules/metro-runtime/src/polyfills/require.js" \
-            node --test tests/native-hermes.test.mjs tests/hermes-semantics.test.mjs tests/hermes.test.mjs | tee "$RUNNER_TEMP/engine-test.txt"
+          {
+            node --version
+            npm run build
+            # Node 20 and 22 print TAP, not the spec format, when output is piped, so ask for spec explicitly.
+            HERMES_SRC="$RUNNER_TEMP/hermes-src" HERMES_BUILD="$RUNNER_TEMP/hermes-build" \
+              METRO_REQUIRE="$PWD/node_modules/metro-runtime/src/polyfills/require.js" \
+              node --test --test-reporter=spec tests/native-hermes.test.mjs tests/hermes-semantics.test.mjs tests/hermes.test.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/engine-test.txt"
           # A skipped test also exits 0, so require these to have really run and passed.
           grep -q "✔ loader core and the Korg runtime work inside a real Hermes engine" "$RUNNER_TEMP/engine-test.txt"
           grep -q "✔ runtime sources create no closures over loop-scoped variables" "$RUNNER_TEMP/engine-test.txt"
           grep -q "✔ the built runtime bundle compiles with Hermes" "$RUNNER_TEMP/engine-test.txt"
+
+      # Saved even when the step fails, so the output can be read without signing in to GitHub.
+      - name: Upload engine test output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-engine-test-output
+          path: ${{ runner.temp }}/engine-test.txt
+          if-no-files-found: ignore
+          retention-days: 3
