@@ -30,6 +30,10 @@ jobs:
           python3 --version
           xcodebuild -version
 
+      # Used only by tests/hermes.test.mjs to check that the bundle compiles; it is not bundled into Korg.
+      - name: Install Hermes compiler for the syntax check
+        run: npm install --no-save --no-package-lock --ignore-scripts hermes-compiler@250829098.0.19
+
       - name: Build and verify local runtime
         run: |
           npm run build
@@ -54,7 +58,7 @@ jobs:
 
       - name: Verify collected artifact
         run: |
-          npm run verify
+          npm run verify -- artifacts/native/KorgResources.bundle
           npm test
 
       - name: Upload loader, resources, source, and licenses

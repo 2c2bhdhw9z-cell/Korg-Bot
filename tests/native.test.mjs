@@ -9,9 +9,9 @@ import test from "node:test";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-test("native ABI call contract against a synthetic runtime", async () => {
+test("native ABI call contract against a synthetic runtime", async t => {
     const compiler = ["clang++", "c++", "g++"].find(command => spawnSync("which", [command], { encoding: "utf8" }).status === 0);
-    if (!compiler) return test.skip("No C++ compiler available for synthetic ABI test");
+    if (!compiler) return t.skip("No C++ compiler available for synthetic ABI test");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "korg-abi-test-"));
     const source = path.join(tmp, "abi.cpp");
     const binary = path.join(tmp, "abi-test");

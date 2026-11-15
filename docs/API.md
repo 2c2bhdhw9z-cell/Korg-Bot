@@ -6,10 +6,11 @@ These are Korg-authored adapters with the requested familiar API names. They are
 
 - `metro.find(predicate)` returns the first recorded exports value for which the predicate returns true.
 - `metro.findByProps(...names)` returns the first module/default export containing every named property.
-- `metro.findByName(name)` matches a function's `name` or `displayName`.
+- `metro.findByName(name, defaultExport = true)` matches a function's `name` or `displayName`; unless `defaultExport` is `false`, a module's `default` export is checked first.
 - `metro.findByStoreName(name)` calls a guarded `getName()` method and matches its string result.
+- `metro.filters.byProps(...names)`, `.byName(name)` and `.byStoreName(name)` build predicates for `metro.find`.
 - `metro.common.React`, `.ReactNative`, `.FluxDispatcher` are lazy host lookups; missing capabilities throw a descriptive error.
-- `metro.getAll()` / `.refresh()` returns already-observed exports; `metro.subscribe(listener)` observes later module initialization.
+- `metro.getAll()` returns already-observed exports. Korg's own runtime also has `refresh()` and `subscribe(listener)`; these are **not** exposed to plugins. A subscriber is told about each module once, and a new subscriber is first told about the modules captured before it subscribed.
 
 Korg does not execute every host module to discover it. Access may vary by React Native/Metro version.
 
@@ -31,12 +32,12 @@ Korg does not execute every host module to discover it. Access may vary by React
 
 `window.vendetta` and `window.bunny` point to the legacy-global compatibility scope. Korg's loader creates isolated plugin scopes for evaluated bundles; global writes performed directly by third-party code are not sandboxed.
 
-Available namespaces include `metro`, `patcher`, `logger` (`log`, `debug`, `info`, `warn`, `error`), `storage`, `AsyncStorage`, `React`, `ReactNative`, `common`, `ui.components`, `ui.showToast`, and `plugin.id`. Supported `require()` names for downloaded bundles are explicitly allowlisted in `runtime/plugins.js`.
+Available namespaces include `metro`, `patcher`, `logger` (`log`, `debug`, `info`, `warn`, `error`), `storage`, `AsyncStorage`, `React`, `ReactNative`, `common`, `ui.components` (the host's `View`, `Text`, `Switch`, `Pressable`, `TextInput` and `ScrollView`), and `plugin.id`. Supported `require()` names for downloaded bundles are explicitly allowlisted in `runtime/plugins.js`.
 
 ## Runtime URL plugins
 
-The URL screen distinguishes a direct JavaScript bundle from a JSON manifest. Manifest `main` paths must be relative and cannot escape the manifest directory. Only HTTPS downloads whose final redirect URL stays HTTPS are accepted. Response source is limited to 2 MiB. Install saves source in host storage but leaves it disabled. An explicit enable evaluates it with `module.exports`, injected `vendetta`/`bunny`, a per-plugin scope, and the documented `require()` allowlist.
+The URL screen distinguishes a direct JavaScript bundle from a JSON manifest. Manifest `name` is required and `main` defaults to `index.js`. `main` must be a relative path that stays inside the manifest's directory: absolute paths, URL schemes, backslashes, control characters and `..` are rejected, including when percent-encoded. Korg resolves it by string, so the result does not depend on the host's `URL` implementation (React Native's polyfill appends a `/` to bare URLs and resolves relative paths by concatenation). Only HTTPS downloads whose final redirect URL stays HTTPS are accepted. Response source is limited to 2 MiB. A first install saves the source in host storage and leaves the plugin disabled; reinstalling or updating a plugin that is already enabled keeps it enabled and restarts it with the new code. An explicit enable evaluates it with `module.exports`, injected `vendetta`/`bunny`, a per-plugin scope, and the documented `require()` allowlist.
 
-Disable and removal call a plugin's `onUnload()` if present, then remove plugin-owned patches. `onLoad()` runs when enabled. The currently supported settings surface is an exported `Settings` component or settings value when present. Caching is for convenience, not a security sandbox or signature mechanism. Code runs in the shared host JavaScript runtime with the capabilities explicitly exposed above.
+Disable and removal call a plugin's `onUnload()` if present, then remove plugin-owned patches. `onLoad()` runs when enabled. The currently supported settings surface is an exported `Settings` component, or a settings value when present; a plain object is shown as JSON text. Caching is for convenience, not a security sandbox or signature mechanism. Code runs in the shared host JavaScript runtime with the capabilities explicitly exposed above.
 
 The plugin store starts empty. Only URLs entered by the user are fetched; no third-party plugin code is built into the runtime.

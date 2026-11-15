@@ -4,7 +4,7 @@ This implementation was independently authored for Korg. No Discord modification
 
 ## Version and verification boundary
 
-Target: supplied Discord iOS 353.0 build 122208, bridgeless React Native, Apple arm64, libc++, iOS 16 minimum. Static Objective-C metadata inspection confirmed `RCTHost` implements `instance:didInitializeRuntime:` with encoding `v32@0:8@16^{Runtime=^^?}24` at image address `0x100610b54`. The interface baseline is **React Native v0.80.0**. The exact React Native/Hermes build shipped in Discord 352 has not been established from host headers or measured on a physical device. iOS 27 and actual Discord execution are unverified. This loader is an implementation targeting that interface, not a claim of demonstrated device compatibility.
+Target: supplied Discord iOS 353.0 build 122208, bridgeless React Native, Apple arm64, libc++, iOS 16 minimum. Static Objective-C metadata inspection confirmed `RCTHost` implements `instance:didInitializeRuntime:` with encoding `v32@0:8@16^{Runtime=^^?}24` at image address `0x100610b54`. The interface baseline is **React Native v0.80.0**. The exact React Native/Hermes build shipped in Discord 353 has not been established from host headers or measured on a physical device. iOS 27 and actual Discord execution are unverified. This loader is an implementation targeting that interface, not a claim of demonstrated device compatibility.
 
 Official declarations inspected:
 
@@ -28,7 +28,9 @@ The script is wrapped in `void function(){ ... }();`, so successful evaluation y
 
 The constructor looks up `RCTHost` and installs an IMP using Apple's Objective-C runtime. An inherited method is overridden on the host class. Later image loads schedule another installation attempt; bounded main-queue retries also handle classes registered after the constructor. A late-loaded loader cannot retroactively intercept an already completed initialization callback. Inject it as an executable load dependency before application startup.
 
-Korg evaluates **before calling the original delegate**, on the callback's runtime thread. This gives the packaged bootstrap a chance to observe Metro's `__d`/`__r` assignments before the host starts its main application. Metro may not exist at that point. The JavaScript bootstrap must support early installation and delay module/UI operations until registration. No native UI or asynchronous JSI access is introduced.
+Korg evaluates **before calling the original delegate**, on the callback's runtime thread. This gives the packaged bootstrap a chance to observe Metro's `__d`/`__r` assignments before the host starts its main application. Metro may not exist at that point. The JavaScript bootstrap must support early installation and delay module/UI operations until registration. The loader adds one native UI element, a small floating **Korg** button that opens a diagnostics alert (loader, hook, resource and evaluation status, with a Copy button), and it keeps that diagnostics snapshot in `NSUserDefaults` under `KorgOriginalDiagnostics`. No asynchronous JSI access is introduced.
+
+The script is passed to the engine as plain source text. Hermes 0.12 (React Native 0.80, bytecode 96) rejects `async` functions, which the runtime uses; Hermes 1.0 (bytecode 98) accepts them. Which engine Discord 353 embeds has not been verified on a device. `tests/hermes.test.mjs` compiles the bundle whenever a Hermes compiler is available.
 
 The only native-created global is immutable `globalThis.__KORG_NATIVE__`:
 
@@ -44,9 +46,9 @@ The JS runtime supplies persistence using host AsyncStorage when available, plug
 
 `bash scripts/build-native.sh` uses Xcode's iPhoneOS SDK directly, C++17, ARC, arm64, libc++, Foundation and UIKit. It refuses undefined symbols and ad-hoc signs the component. The IPA packager must remove the component's old code-signature command before a final IPA signer signs all nested code. The build does not sign or obtain a Discord IPA.
 
-`python3 scripts/collect-native.py` verifies architecture, install name and every load dependency against a fixed Apple-system allowlist, checks the JS SHA-256 against its build manifest, and publishes only a newly assembled component directory. It also records toolchain information, symbol imports, exact file hashes, build provenance, ABI status, and a source archive. Inputs are the built loader in `.build/native/KorgLoader.dylib`, `dist/korg.js`, `dist/manifest.json`, the original runtime sources in `runtime/`, and this repository's own metadata/licenses. Old native artifacts are never carried forward. A manifest claiming an upstream-derived runtime is rejected.
+`python3 scripts/collect-native.py` verifies that the loader is arm64 and that every load dependency is on a fixed Apple-system allowlist, checks the runtime manifest's name, `plugins` and `dependencies`, and publishes only a newly assembled component directory with exact file hashes and a source archive. It does not re-check `dist/korg.js` against its manifest; `scripts/build-native.sh` runs `node scripts/verify.mjs` first. Inputs are the built loader in `.build/native/KorgLoader.dylib`, `dist/korg.js`, `dist/manifest.json`, the original runtime sources in `runtime/`, and this repository's own metadata/licenses. Old native artifacts are never carried forward.
 
-Output: `artifacts/native/KorgLoader.dylib`, `KorgResources.bundle/` (JS and build manifest), `manifest.json`, `korg-source.tar.gz`, and this API/ABI document. The collector packages the source and license metadata separately; it does not embed third-party plugin code.
+Output: `artifacts/native/KorgLoader.dylib`, `KorgResources.bundle/` (JS and build manifest), `manifest.json`, `SOURCE-NOTICE.md`, and `korg-source.tar.gz` (which contains the sources and licenses, including this document). The collector does not embed third-party plugin code.
 
 Tests exercise the independently authored call carrier against a synthetic runtime. The Mac build compiles the real arm64 Mach-O and checks system dependencies and artifact checksums. These checks are not proof of the host ABI. Static callback metadata is verified in the supplied Discord 353 binary; physical-device startup, reload, missing-resource, syntax-error and persistence checks remain necessary.
 

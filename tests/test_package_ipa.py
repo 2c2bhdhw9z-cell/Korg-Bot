@@ -183,6 +183,22 @@ class PackageTests(unittest.TestCase):
             pkg.package(self.ipa, self.loader, self.output)
         self.assertFalse(self.output.exists())
 
+    def test_loader_zip_with_directory_entries_is_accepted(self):
+        # `zip -r` adds entries for folders such as KorgResources.bundle/; they carry no files.
+        with zipfile.ZipFile(self.loader, 'w') as archive:
+            for name in ('KorgResources.bundle/', 'KorgResources.bundle/Extra/'):
+                archive.writestr(zipfile.ZipInfo(name), b'')
+            for name, data in native_files().items():
+                archive.writestr(name, data)
+        report = pkg.package(self.ipa, self.loader, self.output, pkg.sha(self.loader.read_bytes()))
+        self.assertIn(self.app + 'KorgResources.bundle/korg.js', pkg.read_zip(self.output))
+        self.assertEqual(report['thirdPartyPluginsBundled'], False)
+        extra = native_files()
+        extra['KorgResources.bundle/unexpected.js'] = b'not in the manifest'
+        write_zip(self.loader, extra)
+        with self.assertRaisesRegex(ValueError, 'unexpected or missing'):
+            pkg.package(self.ipa, self.loader, self.output.with_name('second.ipa'))
+
     def test_manifest_cannot_claim_plugin_or_runtime_payloads(self):
         files = native_files()
         runtime = json.loads(files['KorgResources.bundle/manifest.json'])

@@ -495,3 +495,131 @@ test("release require captures returned exports without getModules and repairs r
     assert.ok(K.reportStatus().metro.moduleCount > 0);
     assert.equal(context.__KORG_DIAGNOSTICS__.metro.hooks.__r, true);
 });
+
+test("patches stop running after unpatch, restore inherited methods, and keep component statics", async () => {
+    const { K } = await runtime({}, ["core", "patcher"]);
+    const scope = K.patcher.createScope("regression");
+    // A reference captured before unpatch() must not keep running the callback.
+    const target = { greet() { return "original"; } };
+    const unpatch = scope.after("greet", target, (_args, result) => `patched ${result}`);
+    const captured = target.greet;
+    assert.equal(captured(), "patched original");
+    unpatch();
+    assert.equal(captured(), "original");
+    assert.equal(target.greet(), "original");
+    // Unpatching an inherited method must not leave a shadowing own property behind.
+    class Base { hello() { return "base"; } }
+    const child = new Base();
+    const undo = scope.after("hello", child, (_args, result) => `${result}!`);
+    assert.equal(child.hello(), "base!");
+    undo();
+    assert.equal(Object.prototype.hasOwnProperty.call(child, "hello"), false);
+    Base.prototype.hello = () => "changed";
+    assert.equal(child.hello(), "changed");
+    // Patched components keep displayName and statics so name lookups still find them.
+    function Component() {}
+    Component.displayName = "Patched";
+    Component.extra = 7;
+    const holder = { Component };
+    scope.after("Component", holder, () => {});
+    assert.equal(holder.Component.displayName, "Patched");
+    assert.equal(holder.Component.extra, 7);
+    // A property that cannot be redefined fails cleanly and does not break cleanup of other patches.
+    const fixed = {};
+    Object.defineProperty(fixed, "run", { value() { return 1; }, configurable: false, writable: false });
+    const sound = { run() { return 2; } };
+    scope.after("run", sound, (_args, result) => result + 1);
+    assert.throws(() => scope.before("run", fixed, () => {}), error => error.name === "TypeError");
+    assert.doesNotThrow(() => scope.unpatchAll());
+    assert.equal(sound.run(), 2);
+    assert.equal(fixed.run(), 1);
+});
+
+test("logging works before the host installs a console", async () => {
+    const context = vm.createContext({});
+    // V8 gives every context a built-in console; Hermes has none until the host sets one up.
+    vm.runInContext("delete globalThis.console", context);
+    assert.equal(typeof context.console, "undefined");
+    vm.runInContext(await readFile(path.join(repoRoot, "runtime", "core.js"), "utf8"), context);
+    const K = context.__KORG_INTERNAL__;
+    assert.doesNotThrow(() => K.log.error("too early", new Error("no console yet")));
+    const lines = [];
+    context.console = { error: (...values) => lines.push(values), log: (...values) => lines.push(["log", ...values]) };
+    K.log.error("later");
+    K.makeLogger("scope").warn("falls back to log");
+    assert.deepEqual(lines, [["[Korg:runtime]", "later"], ["log", "[Korg:scope]", "falls back to log"]]);
+});
+
+test("Metro announces each module once, so lookups do not replay every module to every listener", async () => {
+    const modules = new Map();
+    const add = id => modules.set(id, { isInitialized: true, publicModule: { exports: { [`prop${id}`]: id } } });
+    for (let id = 0; id < 300; id++) add(id);
+    function hostRequire() {}
+    hostRequire.getModules = () => modules;
+    const { K } = await runtime({ __r: hostRequire });
+    const seen = [];
+    // Like the UI listener, this performs its own lookup for every capture.
+    K.metro.subscribe(value => { seen.push(value); K.metro.findByProps("createElement"); });
+    assert.equal(seen.length, 300);
+    for (let round = 0; round < 5; round++) K.metro.findByProps("missing");
+    assert.equal(seen.length, 300);
+    // A late subscriber hears about earlier modules exactly once; the first listener is not told again.
+    const late = [];
+    K.metro.subscribe(value => late.push(value));
+    assert.equal(late.length, 300);
+    assert.equal(seen.length, 300);
+    add(1000);
+    K.metro.getAll();
+    assert.equal(seen.length, 301);
+    assert.equal(late.length, 301);
+});
+
+test("the discovered AsyncStorage backend is cached after the first scan", async () => {
+    let scans = 0;
+    const store = { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} };
+    const modules = new Map([[1, { isInitialized: true, publicModule: { exports: store } }]]);
+    function hostRequire() {}
+    hostRequire.getModules = () => { scans++; return modules; };
+    const { K } = await runtime({ __r: hostRequire });
+    assert.equal(K.storage.status, "persistent");
+    const afterDiscovery = scans;
+    for (let round = 0; round < 5; round++) {
+        assert.equal(await K.storage.AsyncStorage.getItem("key"), null);
+        assert.equal(K.storage.status, "persistent");
+    }
+    assert.equal(scans, afterDiscovery);
+    K.storage.setBackend(null);
+    assert.equal(K.storage.status, "persistent");
+    assert.ok(scans > afterDiscovery, "Clearing the injected backend must rediscover");
+});
+
+test("a module scanned while its factory is still running is announced again when it completes", async () => {
+    const modules = new Map();
+    function hostRequire() {}
+    hostRequire.getModules = () => modules;
+    function define(factory) {
+        const module = { exports: {} };
+        factory(context, hostRequire, value => value, value => value, module, module.exports, []);
+    }
+    const { K, context } = await runtime({ __r: hostRequire, __d: define });
+    const seen = [];
+    K.metro.subscribe(value => seen.push(value));
+    let shared;
+    context.__d((global, require, importDefault, importAll, module) => {
+        shared = module.exports;
+        // Metro marks a module initialized before its factory runs; a lookup made now sees partial exports.
+        modules.set(1, { publicModule: { exports: shared }, isInitialized: true });
+        K.metro.getAll();
+        module.exports.late = true;
+    }, 1);
+    assert.equal(seen.filter(value => value === shared).length, 2, "once while partial, once on completion");
+    K.metro.getAll();
+    K.metro.findByProps("late");
+    assert.equal(seen.filter(value => value === shared).length, 2, "later lookups must not announce it again");
+});
+
+test("a console that throws cannot break logging", async () => {
+    const context = vm.createContext({ console: { error() { throw new Error("broken console"); }, log() { throw new Error("broken console"); } } });
+    vm.runInContext(await readFile(path.join(repoRoot, "runtime", "core.js"), "utf8"), context);
+    assert.doesNotThrow(() => context.__KORG_INTERNAL__.log.error("still fine"));
+});

@@ -5,19 +5,24 @@
     const queues = new Map();
     const rawTargets = new WeakMap();
     let discovering = false;
+    let discoveredBackend;
 
     function discoverBackend() {
         if (injectedBackend) return injectedBackend;
-        if (globalThis.__KORG_TEST_DISABLE_DISCOVERY__ || !K.metro || discovering) return null;
+        if (globalThis.__KORG_TEST_DISABLE_DISCOVERY__ || !K.metro) return null;
+        if (discoveredBackend) return discoveredBackend;
+        if (discovering) return null;
         discovering = true;
-        try { for (const exports of K.metro.getAll()) {
-            for (const name of [null, "default"]) {
-                let item;
-                try { item = name === null ? exports : exports && exports[name]; } catch { continue; }
-                if (item && ["getItem", "setItem", "removeItem"].every(key => typeof item[key] === "function")) return item;
+        try {
+            // Only the first sighting of the host's AsyncStorage needs the full scan; keep the result.
+            for (const exports of K.metro.getAll()) {
+                for (const name of [null, "default"]) {
+                    let item;
+                    try { item = name === null ? exports : exports && exports[name]; } catch { continue; }
+                    if (item && ["getItem", "setItem", "removeItem"].every(key => typeof item[key] === "function")) return (discoveredBackend = item);
+                }
             }
-        }
-        return null;
+            return null;
         } finally { discovering = false; }
     }
     function requireBackend() {
@@ -206,6 +211,7 @@
         setBackend(backend) {
             if (backend !== null && (!backend || typeof backend.getItem !== "function" || typeof backend.setItem !== "function" || typeof backend.removeItem !== "function")) throw new TypeError("Storage backend must implement getItem, setItem, and removeItem");
             injectedBackend = backend;
+            discoveredBackend = undefined;
         },
         get status() { return discoverBackend() ? "persistent" : "unavailable"; },
     };

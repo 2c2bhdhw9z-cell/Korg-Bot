@@ -191,7 +191,8 @@ def verified_loader(path):
     archive = read_zip(path)
     expected_files = {'KorgLoader.dylib', 'KorgResources.bundle/korg.js',
                       'KorgResources.bundle/manifest.json', 'korg-source.tar.gz', 'SOURCE-NOTICE.md'}
-    require(set(archive) == expected_files | {'manifest.json'}, 'Native archive has unexpected or missing files')
+    files = {name for name, (_, data) in archive.items() if data is not None}
+    require(files == expected_files | {'manifest.json'}, 'Native archive has unexpected or missing files')
     manifest = json.loads(archive['manifest.json'][1])
     require(manifest.get('name') == 'KorgOriginalLoader' and
             manifest.get('version') == '0.2.0-native-original' and

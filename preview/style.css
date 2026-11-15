@@ -45,19 +45,19 @@ a { color: inherit; }
 .topbar, .section-heading { justify-content: space-between; gap: 12px; }
 .brand { gap: 9px; font-size: 23px; font-weight: 750; text-decoration: none; letter-spacing: -1px; }
 .brand img { border-radius: 11px; }
-.badge, .tag { font-size: 9px; font-weight: 650; letter-spacing: 1px; }
+.badge, .tag { font-size: 11px; font-weight: 650; letter-spacing: 1px; }
 .badge { padding: 6px 9px; border: 1px solid var(--border); border-radius: 20px; color: var(--purple); }
 .hero { padding: 38px 0 28px; }
-.eyebrow { color: var(--purple); letter-spacing: 2px; font-size: 10px; font-weight: 650; }
+.eyebrow { color: var(--purple); letter-spacing: 2px; font-size: 11px; font-weight: 650; }
 h1 { font-size: clamp(34px, 9vw, 43px); line-height: 1.12; letter-spacing: -1.8px; margin: 13px 0 16px; }
 h1 span { color: var(--purple); }
 .hero > p:last-of-type { color: var(--muted); font-size: 13px; }
 .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 26px; }
-.facts span { font-size: 10px; color: var(--muted); }
+.facts span { font-size: 11px; color: var(--muted); }
 .facts b { display: block; color: var(--text); font-size: 22px; font-weight: 600; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 20px; margin-bottom: 16px; }
 h2 { font-size: 18px; letter-spacing: -.5px; }
-.tag { color: var(--muted); font-size: 8px; white-space: nowrap; }
+.tag { color: var(--muted); white-space: nowrap; }
 .hint { color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 9px; }
 fieldset { padding: 0; margin: 18px 0; border: 0; min-width: 0; }
 .palettes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -71,14 +71,14 @@ fieldset { padding: 0; margin: 18px 0; border: 0; min-width: 0; }
 .sample-mark { display: grid; place-items: center; width: 34px; height: 34px; color: var(--accent); border: 1px solid var(--border); border-radius: 10px; font-weight: 750; }
 .sample strong, .sample small, .entries strong, .entries small { display: block; }
 .sample strong { font-size: 13px; }
-.sample small { font-size: 10px; color: var(--muted); }
+.sample small { font-size: 11px; color: var(--muted); }
 .sample-dot { width: 8px; height: 8px; border-radius: 50%; margin-left: auto; background: var(--accent); }
 label:not(.palette) { display: block; font-size: 12px; margin: 16px 0 7px; }
 button, input, select { font: inherit; min-height: 44px; }
 input[type="url"], select { background: var(--background); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px; font-size: 16px; min-width: 0; width: 100%; }
 input::placeholder { color: var(--muted); font-size: 12px; opacity: 1; }
 .form-row { gap: 8px; align-items: stretch; }
-select { flex: 1; font-size: 12px; }
+select { flex: 1; }
 button { border: 0; border-radius: 10px; padding: 10px 14px; color: var(--background); background: var(--accent); font-size: 12px; font-weight: 650; cursor: pointer; touch-action: manipulation; }
 button:active { opacity: .8; }
 button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--purple); outline-offset: 4px; }
@@ -92,7 +92,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .quiet { background: var(--background); color: var(--text); flex-shrink: 0; padding-inline: 10px; }
 .note { border-left: 2px solid var(--purple); margin: 24px 0; padding-left: 15px; font-size: 12px; }
 .note p { color: var(--muted); font-size: 11px; margin-top: 6px; }
-footer { font-size: 10px; color: var(--muted); line-height: 1.8; padding: 0 0 8px; }
+footer { font-size: 11px; color: var(--muted); line-height: 1.8; padding: 0 0 8px; }
 [hidden] { display: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (min-width: 540px) {
@@ -102,7 +102,7 @@ footer { font-size: 10px; color: var(--muted); line-height: 1.8; padding: 0 0 8p
 @media (max-width: 359px) {
   .phone { padding-inline: 14px; }
   .card { padding: 16px; }
-  .tag { font-size: 7px; letter-spacing: .6px; }
+  .tag { font-size: 10px; letter-spacing: .6px; }
   .form-row { flex-wrap: wrap; }
   .form-row button { width: 100%; }
 }

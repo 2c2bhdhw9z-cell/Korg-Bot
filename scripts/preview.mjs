@@ -14,7 +14,14 @@ const at = flags.indexOf("--port");
 const port = Number(at < 0 ? process.env.PORT || 5173 : flags[at + 1]);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error("Invalid preview port");
 const server = http.createServer(async (request, response) => {
-    const entry = assets.get(new URL(request.url, "http://local.invalid").pathname);
+    let pathname;
+    try { pathname = new URL(request.url, "http://local.invalid").pathname; }
+    catch {
+        // A malformed request line such as "GET //" must not crash the server.
+        response.writeHead(400).end();
+        return;
+    }
+    const entry = assets.get(pathname);
     if (!entry || !["GET", "HEAD"].includes(request.method)) {
         response.writeHead(404).end();
         return;

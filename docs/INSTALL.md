@@ -1,6 +1,6 @@
 # Building and trying the original Korg runtime
 
-The independently authored loader and runtime source now exist in the staged tree. A physical iPhone run of the rewrite has not been verified. The browser preview is not an app, and a JavaScript bundle or native component ZIP cannot be installed by renaming it to `.ipa`.
+The independently authored loader and runtime source are in this repository. A physical iPhone run of the rewrite has not been verified. The browser preview is not an app, and a JavaScript bundle or native component ZIP cannot be installed by renaming it to `.ipa`.
 
 The user-supplied input is **Discord 353.0, build 122208**, arm64, with an unencrypted main executable (`cryptid=0`) and no injected tweak found in prior static inspection. It was packaged with the verified original loader into `Korg-0.2-original-Discord-353-unsigned.ipa`. The source file is unchanged; the output is unsigned and needs your own signer. The earlier Discord 352 Korg 0.2 package contains the historical Rain-derived stack and is not this rewrite.
 
@@ -23,7 +23,7 @@ npm test
 python3 -m unittest discover -s tests -p 'test_package_ipa.py'
 ```
 
-Python packaging requires Python 3.11+. These are commands to run, not a claim of successful final verification. The main implementation pass must resolve integration issues and report real results.
+Python packaging requires Python 3.11+. These are the verification commands; the **Build Korg loader** workflow runs them on every push, so check the workflow run for current results.
 
 The local build produces:
 
@@ -51,7 +51,7 @@ The **Build Korg loader** workflow is the macOS build route. Its later actual ou
 
 ## Package a separate app copy
 
-After main-agent integration checks and a successful actual native build, the intended CLI is:
+After a successful actual native build, the intended CLI is:
 
 ```sh
 python3 scripts/package-ipa.py \
@@ -61,9 +61,9 @@ python3 scripts/package-ipa.py \
   --output /path/to/Korg-353-unsigned.ipa
 ```
 
-Use an archive whose root contains the collected component files, and obtain its trusted SHA-256 from the actual build. The runtime builder, collector, and packager must agree on their manifest contract before this path is considered ready. The main agent owns that integration and testing; no complete package is claimed by this documentation pass.
+Use an archive whose root contains the collected component files, and obtain its trusted SHA-256 from the actual build. To make one from `artifacts/native/`, run `cd artifacts/native && zip -r -X -D ../native-components.zip .`; folder entries are tolerated, but the file list must match the manifest exactly. The runtime builder, collector, and packager agree on one manifest contract, and the packager refuses an archive that does not match it.
 
-The original packager is designed to preserve the supplied input, validate Mach-O/ZIP structure and dependencies, add `KorgLoader.dylib` and `KorgResources.bundle`, remove old signatures and recognized legacy tweak resources if encountered, and produce a separate unsigned IPA with an inspection report. The clean supplied 353 input does not require an old tweak to be present. The packager does not remove encryption or download Discord.
+The original packager is designed to preserve the supplied input, validate Mach-O/ZIP structure and dependencies, add `KorgLoader.dylib` and `KorgResources.bundle`, rename the app to “Korg”, remove old signatures and recognized legacy tweak resources if encountered, and produce a separate unsigned IPA plus `<output>.inspection.json`. It refuses to run if either output file already exists. The clean supplied 353 input does not require an old tweak to be present. The packager does not remove encryption or download Discord.
 
 A signer you control must sign the app, added loader, frameworks, and extensions and configure provisioning and entitlements. The packager preserves Discord's identifier; use your signer's duplicate-app/identifier configuration if you need a separate install alongside regular Discord. Keep credentials and provisioning material outside the repository.
 
@@ -71,11 +71,11 @@ A signer you control must sign the app, added loader, frameworks, and extensions
 
 Static host inspection confirmed `RCTHost` implements `instance:didInitializeRuntime:` with encoding `v32@0:8@16^{Runtime=^^?}24` at image address `0x100610b54`. The loader targets the public React Native **0.80** JSI ABI. That confirms a callback location and signature, not the embedded engine's exact C++ vtable, return convention, or physical-device behavior. See [the ABI contract](../native/ABI.md).
 
-The loader reads only the embedded UTF-8 JavaScript input and evaluates it on the initialization callback's runtime thread before forwarding to the original callback. Startup timing, host module discovery, UI attachment, persistence, recovery from malformed input, and iOS 27 execution still require actual device checks. Neither Linux synthetic tests nor a macOS compile can establish all of these.
+The loader reads only the bundled UTF-8 JavaScript resource (`KorgResources.bundle/korg.js`) and evaluates it on the initialization callback's runtime thread before forwarding to the original callback. Startup timing, host module discovery, UI attachment, persistence, recovery from malformed input, and iOS 27 execution still require actual device checks. Neither Linux synthetic tests nor a macOS compile can establish all of these.
 
 ## Controls and recovery
 
-If host attachment succeeds, the runtime wraps the React Native root registration and provides a floating **K** control opening Korg's own settings. The six palettes—Graphite, Ember, Glacier, Orchard, Plum, Paper—color those controls only. No full Discord theme engine, font importer, old plugin packs, native safe-mode menu, or global restore/undo behavior is promised.
+If host attachment succeeds, the runtime wraps the React Native root registration and provides a floating **K** control opening Korg's own settings. Separately, the native loader shows a small floating **Korg** button that opens a diagnostics alert (loader, hook, resource and evaluation status, with a Copy button); it works even when the JavaScript side fails to attach. The six palettes—Graphite, Ember, Glacier, Orchard, Plum, Paper—color those controls only. No full Discord theme engine, font importer, old plugin packs, native safe-mode menu, or global restore/undo behavior is promised.
 
 The actual runtime starts with no plugins. Its URL controls accept a direct HTTPS bundle or JSON manifest, store downloaded source disabled initially, and expose enable, disable, update, remove, and supported exported settings. Enabled plugins run with host JavaScript privileges through a partial Vendetta/Bunny adapter; unsupported APIs or host changes can break them. The browser URL demo does none of this execution.
 

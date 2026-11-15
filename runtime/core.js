@@ -11,8 +11,11 @@
             const logger = {};
             for (const level of ["debug", "info", "warn", "error"]) {
                 logger[level] = (...args) => {
-                    const method = console[level] || console.log;
-                    method.call(console, `[Korg:${scope}]`, ...args);
+                    // The loader can run before the host installs a console; logging must never throw.
+                    const sink = root.console;
+                    if (!sink) return;
+                    const method = sink[level] || sink.log;
+                    if (typeof method === "function") { try { method.call(sink, `[Korg:${scope}]`, ...args); } catch { /* A broken console must not break the runtime. */ } }
                 };
             }
             this._loggers.set(scope, logger);

@@ -31,14 +31,29 @@
         return result;
     }
     function makeId(url) { return `remote-${encodeURIComponent(url)}`; }
-    function validHttps(value, base) {
+    function validHttps(value) {
+        const text = String(value).trim();
         let parsed;
-        try { parsed = base === undefined ? new URL(value) : new URL(value, base); }
+        try { parsed = new URL(text); }
         catch { throw new Error("Enter a valid HTTPS URL"); }
-        if ((parsed.protocol || String(parsed.href).split(":")[0] + ":").toLowerCase() !== "https:") throw new Error("Only HTTPS plugin URLs are accepted");
-        // Some React Native URL implementations omit protocol/pathname getters.
+        // Some React Native versions leave getters unimplemented: they return nothing or throw.
+        let protocol;
+        try { protocol = parsed.protocol; } catch { protocol = undefined; }
+        if (String(protocol || text.split(":")[0] + ":").toLowerCase() !== "https:") throw new Error("Only HTTPS plugin URLs are accepted");
         if (typeof parsed.href !== "string" || !/^https:\/\/[^/\s?#]+/i.test(parsed.href)) throw new Error("Enter a valid HTTPS URL");
-        return parsed.href;
+        let href = parsed.href;
+        // React Native's URL polyfill appends "/" to what it is given (older versions even after a query string),
+        // which turns .../plugin.js into .../plugin.js/. WHATWG URLs only add a slash to a bare origin, where fetch
+        // treats both spellings alike, so keep the caller's spelling.
+        if (href === text + "/") href = text;
+        return href;
+    }
+    // Resolve a validated relative path against a base URL by string, independent of the host's URL class.
+    function resolveRelative(base, relative) {
+        const match = /^(https:\/\/[^/?#]+)(\/[^?#]*)?/i.exec(base);
+        if (!match) throw new Error("Enter a valid HTTPS URL");
+        const path = match[2] || "/";
+        return validHttps(match[1] + path.slice(0, path.lastIndexOf("/") + 1) + relative.replace(/^(?:\.\/)+/, ""));
     }
     function utf8Size(text) {
         if (typeof TextEncoder === "function") return new TextEncoder().encode(text).length;
@@ -72,8 +87,13 @@
         try { manifest = JSON.parse(text); } catch { throw new Error("Plugin manifest is not valid JSON"); }
         if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Plugin manifest must be an object");
         if (typeof manifest.name !== "string" || !manifest.name.trim()) throw new Error("Plugin manifest needs a name");
-        if (manifest.main !== undefined && (typeof manifest.main !== "string" || !manifest.main || manifest.main.includes("..") || /^[\\/]|^[a-z][a-z0-9+.-]*:/i.test(manifest.main))) {
-            throw new Error("Manifest main must be a relative bundle path");
+        if (manifest.main !== undefined) {
+            let decoded = null;
+            if (typeof manifest.main === "string") { try { decoded = decodeURIComponent(manifest.main); } catch { decoded = null; } }
+            // Check the percent-decoded path too: %2e%2e/x.js would otherwise climb out of the manifest directory.
+            if (decoded === null || !manifest.main || manifest.main.includes("..") || decoded.includes("..") || /[\\\u0000-\u001f]/.test(decoded) || /^[\\/]|^[a-z][a-z0-9+.-]*:/i.test(manifest.main)) {
+                throw new Error("Manifest main must be a relative bundle path");
+            }
         }
         return manifest;
     }
@@ -87,7 +107,7 @@
         if (kind !== "manifest") throw new Error("Choose a bundle URL or a manifest URL");
         const result = await fetchText(url, MAX_SOURCE);
         const manifest = parseManifest(result.text);
-        const bundle = await fetchText(validHttps(manifest.main || "index.js", result.url), MAX_SOURCE);
+        const bundle = await fetchText(resolveRelative(result.url, manifest.main || "index.js"), MAX_SOURCE);
         return { ...bundle, name: manifest.name.trim(), description: typeof manifest.description === "string" ? manifest.description : "", manifestUrl: result.url, manifest };
     }
     function evaluate(source, api) {
@@ -222,7 +242,7 @@
             const previous = entries.get(id);
             const item = { id, inputUrl, kind, name: resolved.name, description: resolved.description, url: resolved.url, manifestUrl: resolved.manifestUrl, manifest: resolved.manifest,
                 source: resolved.text, enabled: previous ? previous.enabled : false, installedAt: previous ? previous.installedAt : Date.now(), updatedAt: Date.now(), error: null,
-                options: typeof options === "object" && options.options || previous && previous.options || {} };
+                options: options !== null && typeof options === "object" && options.options || previous && previous.options || {} };
             return replace(previous, item);
         });
     }

@@ -22,15 +22,15 @@ Counts are files, not runtime dependencies. Every path in the enumerated snapsho
 | Runtime | 9 | Fixed local bundle inputs |
 | Build/development scripts | 6 | Local build, verify, compile, collect, package, preview |
 | Browser preview | 4 | Original local settings design |
-| Tests | 4 | Runtime/plugin/native and packaging checks |
+| Tests | 6 | Runtime/plugin/native/preview/Hermes and packaging checks |
 | CI | 1 | macOS build workflow |
-| **Total** | **34** | **No listed file omitted** |
+| **Total** | **36** | **No listed file omitted** |
 
 ### Root metadata — 5
 
 - `.gitignore`: build output, signing material, IPA and Python-cache exclusions. Ignore rules are not an audit exclusion.
 - `LICENSE`: retained MIT-0 permission/disclaimer and host/history boundary.
-- `NOTICE.md`: original authorship, historical obligations, and retained file-level notice exception.
+- `NOTICE.md`: original authorship, historical obligations, and host-software notices.
 - `package.json`: local scripts and MIT-0 package metadata; no dependency list. Package-manager metadata is not a bundled runtime dependency.
 - `README.md`: implementation status, local preview/build, native and license limits.
 
@@ -75,11 +75,13 @@ Counts are files, not runtime dependencies. Every path in the enumerated snapsho
 
 The preview is deliberately separate from the actual URL downloader/evaluator in `runtime/plugins.js`. A demo list entry means no manifest or source was retrieved. New preview assets are MIT-0 and use no external library, font, script or stylesheet.
 
-### Tests — 4
+### Tests — 6
 
-- `tests/runtime.test.mjs`: Metro capture, patch ownership, storage semantics, compatibility and synthetic host UI/plugin integration.
-- `tests/plugins.test.mjs`: URL/manifest handling, cache/lifecycle failures, partial dependency mappings, palettes and startup/UI fixtures.
+- `tests/runtime.test.mjs`: Metro capture, patch ownership, storage semantics, compatibility and synthetic host UI/plugin integration, plus regressions for stale patches, once-only module announcements, backend caching and early logging.
+- `tests/plugins.test.mjs`: URL/manifest handling (including React Native's `URL` polyfill and encoded path traversal), cache/lifecycle failures, partial dependency mappings, palettes and startup/UI fixtures.
 - `tests/native.test.mjs`: synthetic C++ ABI call and conditional collected-artifact hash checks. Missing native output can produce a skip; a skip is not native verification.
+- `tests/preview.test.mjs`: the preview server survives a malformed request line and serves the expected status codes.
+- `tests/hermes.test.mjs`: compiles `dist/korg.js` with a Hermes compiler when one is available (`HERMESC` or the `hermes-compiler` npm package); skipped otherwise.
 - `tests/test_package_ipa.py`: synthetic Mach-O/ZIP fixtures, package preservation, legacy-resource removal, artifact hashes and rejection cases. Fixtures do not establish real supplied-IPA packaging success.
 
 ### CI — 1
@@ -101,3 +103,20 @@ Prior inspection of the available supplied IPA established **Discord 353.0, buil
 The native JSI adapter is conditional on the public **React Native 0.80** binary interface. The callback encoding does not verify the exact embedded engine's vtable or C++ return convention. Physical startup, runtime-thread behavior, UI registration timing, persistence, error recovery and iOS 27 compatibility remain unverified. The older Discord 352 Rain-derived IPA cannot validate this rewrite.
 
 Subsequent integration passed the original Mac build at `04e4037`, run `43574190974`, including all 29 Node runtime/native checks with zero skips and the Python packaging suite. The artifact archive SHA-256 `63b173fd78055e654bc84eb561063e0765508f11ab1130c937b901b9d3f4fac2` matched GitHub metadata. Packaging the supplied Discord 353 produced a 106,520,310-byte unsigned IPA; ZIP integrity, ten Mach-O dependency graphs, exact embedded JS/source hashes, absence of old injected mod payloads, and empty plugin/dependency lists were checked. The input SHA-256 remained `0acdf2b1f1443c1840f9e3cd903d641719ad0ed7850a74df450ae9ff9b513422`. Output SHA-256: `b1da84032cef82062b872b894c9b0f0349d0b90c895c71ece3667eab30937c74`. A final sidecar regression test brings the Python suite to nine tests. These are build/static checks, not signing or physical-device validation.
+
+
+## Review pass after `2a16be9`
+
+Every file was read again and the suites were run (Node, Python, and a macOS CI build that was already green). Defects that could be reproduced were fixed with a regression test that fails on the previous code:
+
+- `runtime/metro.js`: every lookup re-announced every module to every listener, so one `findByProps` cost O(modules²) once a listener did its own lookups (3,000 synthetic modules: about 7 s in Node). Modules are now announced once; a new subscriber is replayed earlier modules.
+- `runtime/storage.js`, `runtime/ui.js`: the AsyncStorage backend was rediscovered by a full scan on every operation and the UI re-resolved host modules on every capture. Both are now cached or skipped once resolved.
+- `runtime/patcher.js`: a function captured before `unpatch()` kept running the callback; unpatching an inherited method left a shadowing own property; patched components lost `displayName` and statics; a failed redefine left a ghost patch.
+- `runtime/plugins.js`: React Native's `URL` polyfill turned `…/plugin.js` into `…/plugin.js/` and resolved a manifest's `main` by concatenation; a percent-encoded `..` in `main` escaped the manifest directory; `install(url, null)` threw.
+- `runtime/core.js`: logging threw before the host defined `console`.
+- `scripts/preview.mjs`: a malformed request line (`GET //`) crashed the server.
+- `scripts/package-ipa.py`: a loader ZIP containing folder entries was rejected.
+- `tests/native.test.mjs`: a missing C++ compiler registered a separate skipped test instead of skipping.
+- `preview/style.css`: the `select` rule overrode the 16 px size that stops iOS Safari from zooming on focus; several labels were 7–10 px.
+
+Not established: whether the Hermes build inside Discord 353 accepts `async` functions (Hermes 0.12 rejects them, Hermes 1.0 accepts them), and everything that needs a physical device. Findings that could not be reproduced without a device (native button placement, burst of `install()` retries before the first successful hook, plugin settings screens that throw) were left unchanged.

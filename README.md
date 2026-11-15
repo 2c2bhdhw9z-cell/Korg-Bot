@@ -1,6 +1,6 @@
 # Korg for iOS
 
-Korg is an independently authored, experimental runtime and native loader for a supplied Discord iOS app. The current staged tree contains the replacement source and build scripts. It is no longer a Rain build or a collection of bundled Rain plugins. **A working Discord 353 installation has not yet been demonstrated on a physical iPhone.**
+Korg is an independently authored, experimental runtime and native loader for a supplied Discord iOS app. This repository contains the replacement source and build scripts. It is no longer a Rain build or a collection of bundled Rain plugins. **A working Discord 353 installation has not yet been demonstrated on a physical iPhone.**
 
 The supplied IPA is Discord **353.0, build 122208**, arm64, with `cryptid=0` and no injected tweak found during prior static inspection. That input is available for later packaging; this README does not announce a newly built or signed Korg IPA. The older Discord 352 Korg 0.2 artifact is the historical Rain-derived build, not this rewrite.
 
@@ -10,9 +10,9 @@ The supplied IPA is Discord **353.0, build 122208**, arm64, with `cryptid=0` and
 - Six own palettes: **Graphite, Ember, Glacier, Orchard, Plum, Paper**. They color Korg's controls and settings; they do not implement full Discord themes.
 - An empty plugin registry. No plugin implementations or external runtime dependencies are bundled.
 - Partial, independently implemented `window.vendetta` / `window.bunny` adapters. Familiar API names do not mean universal legacy-plugin support. See [the API contract](docs/API.md).
-- An original Objective-C++ loader using Apple's Objective-C runtime and system libraries, with an embedded local JavaScript bundle. No RainTweak, Theos, Substrate, or ElleKit build path is required by the new loader.
+- An original Objective-C++ loader using Apple's Objective-C runtime and system libraries, which evaluates the bundled local JavaScript resource (`KorgResources.bundle/korg.js`). No RainTweak, Theos, Substrate, or ElleKit build path is required by the new loader.
 
-The actual runtime can download a user-entered HTTPS bundle or manifest, store its source, and enable it explicitly. Downloaded plugins execute in the host JavaScript runtime, not a security sandbox. New installs start disabled; saved enabled plugins can resume from their cached source. This is separate from the browser demo below.
+The actual runtime can download a user-entered HTTPS bundle or manifest, store its source, and enable it explicitly. Downloaded plugins execute in the host JavaScript runtime, not a security sandbox. New installs start disabled; reinstalling or updating an already-enabled plugin keeps it enabled and restarts it with the new code; saved enabled plugins can resume from their cached source. This is separate from the browser demo below.
 
 ## Local design preview
 
@@ -35,9 +35,9 @@ npm test
 python3 -m unittest discover -s tests -p 'test_package_ipa.py'
 ```
 
-These are verification commands, not a report that all checks have passed. Final runtime and packager integration checks belong to the main implementation pass.
+These are the verification commands; the **Build Korg loader** workflow runs them on every push. Check the workflow run, not this README, for current results.
 
-`scripts/build.mjs` syntax-checks and concatenates exactly nine local files in a fixed order. It emits `dist/korg.js` and `dist/manifest.json`; the manifest records every source's SHA-256 with `plugins: []` and `dependencies: []`. The verifier reconstructs the bundle from those inputs and checks exact equality and hashes. The build fetches no source, plugin catalog, package, or Hermes compiler. No Hermes bytecode is promised.
+`scripts/build.mjs` syntax-checks and concatenates exactly nine local files in a fixed order. It emits `dist/korg.js` and `dist/manifest.json`; the manifest records every source's SHA-256 with `plugins: []` and `dependencies: []`. The verifier reconstructs the bundle from those inputs and checks exact equality and hashes. The build fetches no source, plugin catalog, package, or Hermes compiler, and ships no Hermes bytecode: the bundle is evaluated as plain source. `tests/hermes.test.mjs` compiles `dist/korg.js` with Hermes when a compiler is available (`HERMESC=/path/to/hermesc npm test`; CI installs the `hermes-compiler` npm package for this check only). Hermes 0.12 (React Native 0.80) rejects `async` functions and Hermes 1.0 accepts them; see [the ABI contract](native/ABI.md).
 
 ## Native build and installation
 

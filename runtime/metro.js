@@ -3,6 +3,9 @@
     const records = new Set();
     const listeners = new Set();
     const notifying = new Set();
+    // Each exports object is announced once. Replaying every module on every lookup made one
+    // findByProps cost O(modules^2) once a listener did its own lookups, as the UI listener does.
+    const notified = new Set();
     const wrappers = new WeakMap();
     const factories = new WeakMap();
     const hooks = new Map();
@@ -22,8 +25,10 @@
         } catch (error) { lastError = error; }
         return value;
     }
-    function notify(value) {
-        if (!looksLikeExports(value) || notifying.has(value)) return;
+    function notify(value, completed = false) {
+        // A finished factory is announced even if a scan already saw its partial exports; that happens once per module.
+        if (!looksLikeExports(value) || notifying.has(value) || (!completed && notified.has(value))) return;
+        notified.add(value);
         notifying.add(value);
         try {
             for (const listener of Array.from(listeners)) {
@@ -52,7 +57,7 @@
                 let exports = args[5];
                 try { if (module) exports = module.exports; } catch (error) { lastError = error; }
                 record(exports);
-                notify(exports);
+                notify(exports, true);
             } catch (error) { lastError = error; }
             return result;
         };
@@ -142,8 +147,14 @@
     }
     function subscribe(listener) {
         if (typeof listener !== "function") throw new TypeError("metro.subscribe requires a listener");
+        // A new listener hears about modules captured before it subscribed; older listeners do not hear them again.
+        const earlier = Array.from(notified);
         listeners.add(listener);
         scan();
+        for (const value of earlier) {
+            if (!listeners.has(listener)) break;
+            try { listener(value); } catch (error) { lastError = error; }
+        }
         return () => listeners.delete(listener);
     }
     function find(filter) {

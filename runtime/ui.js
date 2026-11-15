@@ -103,7 +103,7 @@
         const content = pluginSettings ? React.createElement(View, null,
             React.createElement(Text, null, "Plugin settings"),
             typeof pluginSettings === "function" ? React.createElement(pluginSettings) : React.createElement(Text, null, JSON.stringify(pluginSettings)), 
-            React.createElement(Button, { title: "Back", onPress: () => update({ settingsId: null }) })) : React.createElement(Native.ScrollView || View, null,
+            React.createElement(Button, { title: "Back", onPress: () => update({ settingsId: null }) })) : React.createElement(Native.ScrollView || View, Native.ScrollView ? { keyboardShouldPersistTaps: "handled" } : null,
             React.createElement(Native.Text, { style: { color: palette.text, fontSize: 21, fontWeight: "700", marginBottom: 12 } }, "Korg"),
             React.createElement(Text, null, "Remote plugins execute code with this app's privileges. Only install bundles you trust."),
             Native.TextInput ? React.createElement(Native.TextInput, { value: current.url, editable: !current.busy, onChangeText: url => { if (!state.busy) update({ url }); },
@@ -202,7 +202,8 @@
     function onCapture() {
         if (capturing) return;
         capturing = true;
-        try { attach(); } finally { capturing = false; }
+        // Once the host modules are resolved and the root is wrapped, further module captures need no lookups.
+        try { if (!attachedRegistry || !React || !Native) attach(); } finally { capturing = false; }
         const available = !capturing && !retrying && K.storage && K.storage.status === "persistent";
         if (available && !backendWasAvailable && K.plugins && K.themes) {
             backendWasAvailable = true;

@@ -16,7 +16,7 @@ function fixture(fetcher = async url => response(bundle, url), options = {}) {
     const logs = [];
     const scopes = [];
     const objects = new Map();
-    const context = vm.createContext({ URL, fetch: fetcher, AbortController, TextEncoder: options.noEncoder ? undefined : TextEncoder,
+    const context = vm.createContext({ URL: options.URL || URL, fetch: fetcher, AbortController, TextEncoder: options.noEncoder ? undefined : TextEncoder,
         setTimeout, clearTimeout, __KORG_INTERNAL__: null });
     const control = { available: true, readError: null, saveError: null, flushError: null };
     const createScope = id => ({
@@ -314,4 +314,85 @@ test("real Metro release exports select lazy full RN over partial exports and re
         assert.equal(dangerousReads, 0);
         assert.equal(K.metro.lastError, undefined);
     }
+});
+
+// Behavior-faithful port of React Native 0.80's Libraries/Blob/URL.js (MIT, Meta): it is a string
+// wrapper, not a WHATWG parser. It appends "/" to bare URLs and resolves relative URLs by concatenation.
+const validateBaseUrl = url => /^(?:(?:(?:https?|ftp):)?\/\/)(?:(?:[1-9]\d?|1\d\d|2[01]\d|22[0-3])(?:\.(?:1?\d{1,2}|2[0-4]\d|25[0-5])){2}(?:\.(?:[1-9]\d?|1\d\d|2[0-4]\d|25[0-4]))|(?:(?:[a-z0-9\u00a1-\uffff][a-z0-9\u00a1-\uffff_-]{0,62})?[a-z0-9\u00a1-\uffff]\.)*(?:[a-z\u00a1-\uffff]{2,}\.?))(?::\d{2,5})?(?:[/?#]\S*)?$/.test(url);
+class ReactNativeURL {
+    constructor(url, base) {
+        if (!base || validateBaseUrl(url)) {
+            this._url = url;
+            if (this._url.includes("#")) {
+                const split = this._url.split("#");
+                if (!split[0].split("://")[1].includes("/")) this._url = split.join("/#");
+            }
+            if (!this._url.endsWith("/") && !(this._url.includes("?") || this._url.includes("#"))) this._url += "/";
+        } else {
+            let baseUrl = typeof base === "string" ? base : base.toString();
+            if (typeof base === "string" && !validateBaseUrl(baseUrl)) throw new TypeError(`Invalid base URL: ${baseUrl}`);
+            if (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+            if (!url.startsWith("/")) url = `/${url}`;
+            if (baseUrl.endsWith(url)) url = "";
+            this._url = `${baseUrl}${url}`;
+        }
+    }
+    get href() { return this._url; }
+    get protocol() { const match = this._url.match(/^([a-zA-Z][a-zA-Z\d+\-.]*):/); return match ? `${match[1]}:` : ""; }
+    toString() { return this._url; }
+}
+
+test("plugin URLs keep their exact spelling under React Native's URL polyfill", async () => {
+    const requests = [];
+    const f = fixture(async url => {
+        requests.push(url);
+        return response(url.endsWith("plugin.json") ? '{"name":"Demo","main":"./src/main.js"}' : bundle, url);
+    }, { URL: ReactNativeURL });
+    const direct = await f.plugins.install("https://example.test/dir/plugin.js", "bundle");
+    assert.equal(direct.url, "https://example.test/dir/plugin.js");
+    const manifest = await f.plugins.install("https://example.test/dir/plugin.json", "manifest");
+    assert.equal(manifest.name, "Demo");
+    assert.deepEqual(requests, ["https://example.test/dir/plugin.js", "https://example.test/dir/plugin.json", "https://example.test/dir/src/main.js"]);
+    await f.plugins.update(direct.id);
+    assert.equal(requests.at(-1), "https://example.test/dir/plugin.js");
+    // Bare origins: both spellings reach the same resource, and the caller's spelling is kept.
+    const root = await f.plugins.install("https://example.test", "bundle");
+    assert.equal(root.url, "https://example.test");
+});
+
+// Older React Native releases (for example 0.73) also append "/" after a query string and throw from
+// getters they never implemented, such as protocol.
+class LegacyReactNativeURL extends ReactNativeURL {
+    constructor(url, base) { super(url, base); if (!base && !this._url.endsWith("/")) this._url += "/"; }
+    get protocol() { throw new Error("URL.protocol is not implemented"); }
+}
+
+test("plugin URLs with query strings survive older React Native URL implementations", async () => {
+    const requests = [];
+    const f = fixture(async url => {
+        requests.push(url);
+        return response(url.includes("plugin.json") ? '{"name":"Legacy","main":"index.js?token=abc"}' : bundle, url);
+    }, { URL: LegacyReactNativeURL });
+    const direct = await f.plugins.install("https://example.test/dir/plugin.js?v=1", "bundle");
+    assert.equal(direct.url, "https://example.test/dir/plugin.js?v=1");
+    await f.plugins.install("https://example.test/dir/plugin.json?cache=1", "manifest");
+    assert.deepEqual(requests, ["https://example.test/dir/plugin.js?v=1", "https://example.test/dir/plugin.json?cache=1", "https://example.test/dir/index.js?token=abc"]);
+    await assert.rejects(f.plugins.install("http://example.test/plugin.js?v=1", "bundle"), /Only HTTPS/);
+    await assert.rejects(f.plugins.install("not a url", "bundle"), /HTTPS/);
+});
+
+test("install tolerates null options and a manifest main cannot leave its directory", async () => {
+    const plain = fixture();
+    const item = await plain.plugins.install("https://example.test/null.js", null);
+    assert.equal(item.enabled, false);
+    for (const main of ["%2e%2e/secret.js", ".%2e/secret.js", "%2E%2E/secret.js", "dir%5Csecret.js", "bad%00name.js", "%E0%A4%A.js"]) {
+        const requests = [];
+        const f = fixture(async url => { requests.push(url); return response(JSON.stringify({ name: "Escape", main }), url); });
+        await assert.rejects(f.plugins.install("https://example.test/a/b/plugin.json", "manifest"), /relative bundle path/, main);
+        assert.deepEqual(requests, ["https://example.test/a/b/plugin.json"], main);
+    }
+    const requests = [];
+    const nested = fixture(async url => { requests.push(url); return response(url.includes("plugin.json") ? '{"name":"Nested","main":"dist/./index.js?v=2"}' : bundle, url); });
+    await nested.plugins.install("https://example.test/a/b/plugin.json?cache=1", "manifest");
+    assert.equal(requests.at(-1), "https://example.test/a/b/dist/index.js?v=2");
 });
