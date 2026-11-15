@@ -1,25 +1,46 @@
 (function (K) {
     "use strict";
 
+    // The host's React, react-native and AppRegistry. Each is recognised by a cheap check on the module that has just
+    // finished loading, so attaching costs nothing per module. (An earlier build searched every module again on each
+    // module load, which made start-up quadratic.)
     let React;
     let Native;
-    let attachedRegistry;
+    let registry;
+    let patchScope;
+    let providerInstalled = false;
     let listening = false;
-    let enumerationHooked = false;
     let subscriptions = false;
-    let attaching = false;
     let capturing = false;
     let retrying = false;
-    let registeredScopes = 0;
     let lastPalette = null;
     let loading;
     let backendWasAvailable = false;
+    let preferencesRequested = false;
+    let heartbeatPending = false;
+    let heartbeatTicks = 0;
+    let boundary;
     const subscribers = new Set();
-    const hostState = { attached: false, phase: "waiting", rootWrapped: false, reason: "Waiting for React Native application registry" };
-    function status() { return { ...hostState }; }
+    const hostState = {
+        attached: false, phase: "waiting", rootWrapped: false, reason: "Waiting for React Native application registry",
+        react: false, reactNative: false, registry: "", composed: false, registered: [], ran: [], renders: 0, mounted: false, overlayError: "",
+    };
+    function status() { return { ...hostState, registered: hostState.registered.slice(), ran: hostState.ran.slice() }; }
+    const names = list => (list.length ? list.join(", ") : "none");
+    // The lines the diagnostics screen shows: what Korg found, what it did, and how far the app got.
+    function describe() {
+        const s = hostState;
+        const lines = [
+            `Host: React ${s.react ? "found" : "missing"}, react-native ${s.reactNative ? "found" : "missing"}, AppRegistry ${s.registry ? `found (${s.registry})` : "missing"}`,
+            `Root: wrapper ${s.attached ? (s.composed ? "installed, combined with another" : "installed") : "not installed"}; apps registered: ${names(s.registered)}; apps run: ${names(s.ran)}`,
+            `Overlay: phase=${s.phase}; ${s.renders ? "rendered" : "not rendered"}${s.mounted ? ", mounted" : ""}${s.overlayError ? `; ERROR ${s.overlayError}` : ""}`,
+        ];
+        if (s.reason) lines.push(`UI note: ${s.reason}`);
+        return lines;
+    }
     function report() {
         if (K.runtime && K.runtime.ui) Object.assign(K.runtime.ui, hostState);
-        if (K.reportStatus) K.reportStatus(true);
+        if (K.reportStatus) K.reportStatus();
     }
     // Explains why the UI is not attached yet; reported only when the explanation changes.
     function note(reason) {
@@ -29,20 +50,84 @@
     }
     const state = { visible: false, url: "", kind: "bundle", notice: "", plugins: [], theme: "graphite", busy: false, settingsId: null };
 
-    function hostModule(name, common, required) {
-        const supplied = K.ui && K.ui.modules && K.ui.modules[name];
-        if (supplied) return supplied;
+    // ---- Recognising the host's modules without reading anything that could run host code --------------------------
+    const isObject = value => value !== null && (typeof value === "object" || typeof value === "function");
+    function ownValue(object, key) {
         try {
-            const found = K.metro && K.metro.findByProps && K.metro.findByProps(...required);
-            if (found) return found;
-        } catch { /* Not captured yet. */ }
-        try {
-            const found = K.metro && K.metro.common && K.metro.common[common];
-            if (found && required.every(key => key in Object(found))) return found;
-        } catch { /* Not captured yet. */ }
-        if (globalThis[common] && required.every(key => key in Object(globalThis[common]))) return globalThis[common];
-        try { return K.metro && K.metro.findByProps(...required); } catch { return undefined; }
+            const descriptor = Object.getOwnPropertyDescriptor(object, key);
+            return descriptor && "value" in descriptor ? descriptor.value : undefined;
+        } catch { return undefined; }
     }
+    // react-native's index defines its exports as lazy getters; asking whether one exists must not call it.
+    function ownKey(object, key) {
+        try { return Object.getOwnPropertyDescriptor(object, key) !== undefined; } catch { return false; }
+    }
+    const looksLikeReact = value => isObject(value) && ["createElement", "useState", "useEffect"].every(key => typeof ownValue(value, key) === "function");
+    const looksLikeNative = value => isObject(value) && ["AppRegistry", "View", "Text", "Pressable", "Modal"].every(key => ownKey(value, key));
+    const looksLikeRegistry = value => isObject(value) && ["registerComponent", "runApplication", "setWrapperComponentProvider"].every(key => typeof ownValue(value, key) === "function");
+    function adoptReact(value) { React = value; hostState.react = true; if (K.metro && K.metro.prefer) K.metro.prefer("React", value); }
+    function adoptNative(value) { Native = value; hostState.reactNative = true; if (K.metro && K.metro.prefer) K.metro.prefer("ReactNative", value); }
+    function adoptRegistry(value, source) { registry = value; hostState.registry = source; }
+    // Looks at one module's exports, and at the two places an AppRegistry export hides: `default` and `.AppRegistry`.
+    function considerExports(exports) {
+        if (!isObject(exports) || (React && Native && registry)) return;
+        for (const candidate of [exports, ownValue(exports, "default"), ownValue(exports, "AppRegistry")]) {
+            if (!isObject(candidate)) continue;
+            if (!React && looksLikeReact(candidate)) adoptReact(candidate);
+            if (!Native && looksLikeNative(candidate)) adoptNative(candidate);
+            if (!registry && looksLikeRegistry(candidate)) adoptRegistry(candidate, "module");
+        }
+    }
+    // React Native's AppRegistry module also stores the registry in a global. Watching that global finds the registry
+    // at the moment it is created, and works even if Metro's hooks were installed too late to see the module.
+    function considerGlobalRegistry(value) {
+        if (registry || !isObject(value)) return;
+        let usable = false;
+        try { usable = typeof value.registerComponent === "function" && typeof value.setWrapperComponentProvider === "function"; } catch { usable = false; }
+        if (usable) { adoptRegistry(value, "RN$AppRegistry"); progress(); }
+    }
+    function watchRegistryGlobal() {
+        try {
+            const descriptor = Object.getOwnPropertyDescriptor(globalThis, "RN$AppRegistry");
+            if (descriptor) { if ("value" in descriptor) considerGlobalRegistry(descriptor.value); return; }
+            Object.defineProperty(globalThis, "RN$AppRegistry", {
+                configurable: true,
+                enumerable: true,
+                get() { return undefined; },
+                set(value) {
+                    // Become an ordinary property again first: the native side reads this global to start the app.
+                    Object.defineProperty(globalThis, "RN$AppRegistry", { value, writable: true, configurable: true, enumerable: true });
+                    try { considerGlobalRegistry(value); } catch (error) { K.log.warn("Korg could not inspect AppRegistry", error); }
+                },
+            });
+        } catch (error) { K.log.warn("Korg could not watch RN$AppRegistry", error); }
+    }
+    // Slower, broader search for anything still missing. Only runs from a timer or a render, never during module loading.
+    function resolveHost() {
+        const supplied = K.ui && K.ui.modules;
+        if (supplied) {
+            if (!React && supplied.react) adoptReact(supplied.react);
+            if (!Native && supplied["react-native"]) adoptNative(supplied["react-native"]);
+        }
+        if ((!React || !Native || !registry) && K.metro && typeof K.metro.getAll === "function") {
+            let modules = [];
+            try { modules = K.metro.getAll(); } catch { modules = []; }
+            for (const exports of modules) {
+                considerExports(exports);
+                if (React && Native && registry) break;
+            }
+        }
+        const find = (...properties) => { try { return K.metro && K.metro.findByProps ? K.metro.findByProps(...properties) : undefined; } catch { return undefined; } };
+        if (!React) { const found = find("createElement", "useState", "useEffect"); if (found) adoptReact(found); }
+        if (!Native) { const found = find("View", "Text", "AppRegistry"); if (found) adoptNative(found); }
+        if (!registry) { const found = find("registerComponent", "getAppKeys", "setWrapperComponentProvider"); if (found) adoptRegistry(found, "module scan"); }
+        if (!registry && Native) {
+            // Reading a lazy export can start module initialization, which is only safe from here.
+            try { const candidate = Native.AppRegistry; if (isObject(candidate) && typeof candidate.setWrapperComponentProvider === "function") adoptRegistry(candidate, "react-native export"); } catch { /* Not available yet. */ }
+        }
+        progress();
+    }
+
     function update(values) {
         Object.assign(state, values);
         for (const listener of subscribers) {
@@ -134,62 +219,110 @@
         if (Native.Modal) return React.createElement(Native.Modal, { visible: current.visible, animationType: "slide", onRequestClose: close }, panel);
         return current.visible ? React.createElement(View, { style: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 } }, panel) : null;
     }
+    // ---- The wrapper the app is rendered inside ---------------------------------------------------------------------
+    // AppRegistry reads its wrapper provider every time an app starts, so installing ours works whether Discord has
+    // registered its root yet or not, and needs no change to the app's own registration.
+    function getBoundary() {
+        if (boundary !== undefined) return boundary;
+        if (!React || typeof React.Component !== "function") return (boundary = null);
+        class KorgBoundary extends React.Component {
+            constructor(props) { super(props); this.state = { failed: false }; }
+            static getDerivedStateFromError() { return { failed: true }; }
+            componentDidCatch(error) {
+                hostState.overlayError = String(error && error.message || error).slice(0, 200);
+                K.reportError("Korg overlay render error", error);
+                report();
+            }
+            render() { return this.state.failed ? null : this.props.children; }
+        }
+        return (boundary = KorgBoundary);
+    }
     function Overlay(props) {
         const render = useState();
         subscribeRender(render);
-        return React.createElement(Native.View, { style: { flex: 1 } },
-            React.createElement(props.Component, props.props),
-            React.createElement(Native.View, { style: { position: "absolute", right: 12, bottom: 24 } }, React.createElement(Button, { title: "K", onPress: open })),
-            React.createElement(Settings));
+        React.useEffect(() => { if (!hostState.mounted) { hostState.mounted = true; report(); } }, []);
+        hostState.renders += 1;
+        if (hostState.phase !== "rendered") { hostState.phase = "rendered"; report(); hostReady(); }
+        const controls = [
+            React.createElement(Native.View, { key: "korg-button", style: { position: "absolute", right: 12, bottom: 24 } }, React.createElement(Button, { title: "K", onPress: open })),
+            React.createElement(Settings, { key: "korg-settings" }),
+        ];
+        const Guard = getBoundary();
+        // The app sits beside the controls, never inside the guard, so a failure in Korg's UI cannot take the app down.
+        return React.createElement(Native.View, { style: { flex: 1 } }, props.children, Guard ? React.createElement(Guard, null, controls) : controls);
     }
-    function attach() {
-        if (attaching) return Boolean(attachedRegistry);
-        attaching = true;
+    function KorgWrapper(props) {
+        if (!React || !Native) resolveHost();
+        // Without React there is nothing to draw with: show the app untouched rather than a blank screen.
+        if (!React || !Native || !K.plugins || !K.themes) return props.children === undefined ? null : props.children;
+        return React.createElement(Overlay, props);
+    }
+    function wrapperProvider() {
+        hostState.rootWrapped = true;
+        if (hostState.phase !== "rendered") hostState.phase = "wrapped";
+        report();
+        return KorgWrapper;
+    }
+    wrapperProvider.__korg = true;
+    // If something else installs its own wrapper later, run both rather than losing one.
+    function combine(theirs) {
+        function combined(params) {
+            const Inner = theirs(params);
+            if (!Inner || !React) return Inner || KorgWrapper;
+            return function Combined(props) { return React.createElement(KorgWrapper, null, React.createElement(Inner, props)); };
+        }
+        combined.__korg = true;
+        return combined;
+    }
+    function remember(list, name) {
+        const text = String(name);
+        if (list.includes(text) || list.length >= 8) return;
+        list.push(text);
+        report();
+    }
+    function installProvider() {
+        if (providerInstalled || !registry || !K.patcher) return providerInstalled;
         try {
-            const resolvedReact = hostModule("react", "React", ["createElement", "useState", "useEffect"]);
-            let resolvedNative = hostModule("react-native", "ReactNative", ["View", "Text", "AppRegistry"]);
-            if (!resolvedNative && K.metro && K.metro.findByProps) {
-                const primitives = K.metro.findByProps("View", "Text");
-                const registry = K.metro.findByProps("registerComponent", "getAppKeys");
-                if (primitives && registry) {
-                    // Delegate to live host exports; do not enumerate RN's lazy getters.
-                    resolvedNative = Object.create(primitives);
-                    Object.defineProperty(resolvedNative, "AppRegistry", { value: registry });
-                }
-            }
-            if (resolvedReact) React = resolvedReact;
-            if (resolvedNative) Native = resolvedNative;
-            const registry = Native && Native.AppRegistry;
-            if (!registry || typeof registry.registerComponent !== "function" || !K.patcher) {
-                note(`Waiting for host modules: React ${React ? "found" : "missing"}, ReactNative ${Native ? "found" : "missing"}, AppRegistry ${registry ? "found" : "missing"}`);
-                return false;
-            }
-            if (registry === attachedRegistry) return true;
-            const scope = K.patcher.createScope("korg-runtime-ui");
-            registeredScopes++;
-            scope.before("registerComponent", registry, args => {
-                const provider = args[1];
-                if (typeof provider !== "function" || args[0] === "KorgRuntimeUI") return;
-                args[1] = function (...providerArgs) {
-                    const Component = provider.apply(this, providerArgs);
-                    Object.assign(hostState, { phase: "registered", rootWrapped: true });
-                    report();
-                    function KorgOverlay(props) {
-                        // React can arrive after AppRegistry. Resolve again when the host renders.
-                        attach();
-                        if (!React || !Native || !K.plugins || !K.themes) return null;
-                        return React.createElement(Overlay, { Component, props });
-                    }
-                    return KorgOverlay;
-                };
+            const scope = patchScope || (patchScope = K.patcher.createScope("korg-runtime-ui"));
+            // Observers only: they record which apps register and run, and never change the call.
+            scope.before("registerComponent", registry, args => { remember(hostState.registered, args[0]); });
+            scope.before("runApplication", registry, args => { remember(hostState.ran, args[0]); hostReady(); });
+            scope.before("setWrapperComponentProvider", registry, args => {
+                const next = args[0];
+                if (typeof next !== "function" || next.__korg) return;
+                hostState.composed = true;
+                args[0] = combine(next);
             });
-            attachedRegistry = registry;
-            Object.assign(hostState, { attached: true, phase: hostState.rootWrapped ? "registered" : "captured", reason: null });
-            report();
+            registry.setWrapperComponentProvider(wrapperProvider);
+            providerInstalled = true;
+            try { if (typeof registry.getAppKeys === "function") for (const key of registry.getAppKeys()) remember(hostState.registered, key); } catch { /* Optional detail. */ }
+            Object.assign(hostState, { attached: true, phase: hostState.phase === "waiting" ? "captured" : hostState.phase });
             update({ plugins: K.plugins ? K.plugins.list() : [], theme: K.themes ? K.themes.current() : "graphite" });
-            return true;
-        } catch (error) { K.log.warn("Korg UI host attachment failed", error); note(`Host attachment failed: ${String(error && error.message || error)}`); return false; }
-        finally { attaching = false; }
+        } catch (error) {
+            K.log.warn("Korg UI host attachment failed", error);
+            note(`Host attachment failed: ${String(error && error.message || error)}`);
+        }
+        return providerInstalled;
+    }
+    // Brings the explanation and the diagnostics up to date after anything was found.
+    function progress() {
+        if (registry && !providerInstalled) installProvider();
+        const missing = [];
+        if (!React) missing.push("React");
+        if (!Native) missing.push("react-native");
+        if (!registry) missing.push("AppRegistry");
+        if (hostState.reason && hostState.reason.indexOf("Host attachment failed") === 0) { report(); return providerInstalled; }
+        const reason = missing.length ? `Waiting for host modules: ${missing.join(", ")} not found yet` : null;
+        if (hostState.reason !== reason) { hostState.reason = reason; }
+        report();
+        return providerInstalled;
+    }
+    // The app is starting (or has started), so saved plugins and appearance can load without racing the host's modules.
+    function hostReady() {
+        if (preferencesRequested || !K.plugins || !K.themes) return;
+        preferencesRequested = true;
+        backendWasAvailable = Boolean(K.storage && K.storage.status === "persistent");
+        retry().catch(() => {});
     }
     function retry() {
         if (loading) return loading;
@@ -208,12 +341,15 @@
         loading.catch(error => { update({ notice: String(error && error.message || error) }); });
         return loading;
     }
-    function onCapture() {
+    function onCapture(value) {
         if (capturing) return;
         capturing = true;
-        // Once the host modules are resolved and the root is wrapped, further module captures need no lookups.
-        try { if (!attachedRegistry || !React || !Native) attach(); } finally { capturing = false; }
-        const available = !capturing && !retrying && K.storage && K.storage.status === "persistent";
+        try { if (!React || !Native || !registry) { considerExports(value); if (registry && !providerInstalled) progress(); } }
+        catch (error) { K.log.warn("Korg could not inspect a module", error); }
+        finally { capturing = false; }
+        if (React && Native && registry) { /* nothing more to look for */ } else startHeartbeat();
+        if (!preferencesRequested) return;
+        const available = !retrying && K.storage && K.storage.status === "persistent";
         if (available && !backendWasAvailable && K.plugins && K.themes) {
             backendWasAvailable = true;
             // A backend can arrive while the first read is already failing.
@@ -221,30 +357,44 @@
             else retry();
         } else if (!available) backendWasAvailable = false;
     }
+    // A slow safety net: some of this only happens after the host has finished loading, and nothing else would run then.
+    function startHeartbeat() {
+        if (heartbeatPending || typeof globalThis.setTimeout !== "function") return;
+        if (hostState.mounted || heartbeatTicks >= 150) return;
+        heartbeatPending = true;
+        const timer = globalThis.setTimeout(tick, heartbeatTicks < 20 ? 1000 : 5000);
+        if (timer && typeof timer.unref === "function") timer.unref();
+    }
+    function tick() {
+        heartbeatPending = false;
+        heartbeatTicks += 1;
+        try {
+            if (!React || !Native || !registry) resolveHost(); else progress();
+            if (heartbeatTicks >= 5) hostReady();
+        } catch (error) { K.log.warn("Korg UI heartbeat failed", error); }
+        startHeartbeat();
+    }
     function initialize() {
-        // Subscribe and hook before touching persistence or yielding to a promise.
+        // Subscribe and watch before touching persistence or yielding to a promise.
+        watchRegistryGlobal();
         if (!listening && K.metro && typeof K.metro.subscribe === "function") {
             listening = true;
             K.metro.subscribe(onCapture);
         }
-        if (!enumerationHooked && !registeredScopes && K.metro && K.metro.getAll && K.patcher) {
-            enumerationHooked = true;
-            const scope = K.patcher.createScope("korg-runtime-ui-metro");
-            scope.after("getAll", K.metro, (_args, modules) => { onCapture(); return modules; });
-        }
-        attach();
         if (!subscriptions && K.plugins && K.themes) {
             subscriptions = true;
             K.plugins.subscribe(plugins => update({ plugins }));
             if (typeof K.themes.subscribe === "function") K.themes.subscribe((palette, theme) => notifyTheme(palette, theme));
-            retry();
         }
+        // At boot this finds nothing and costs nothing; when called later it looks for anything still missing.
+        if (!React || !Native || !registry) resolveHost(); else progress();
+        startHeartbeat();
         return hostState;
     }
-    K.ui = Object.assign(K.ui || {}, { status, initialize, retry, openSettings: open,
+    K.ui = Object.assign(K.ui || {}, { status, describe, initialize, retry, openSettings: open,
         components: Object.assign(K.ui && K.ui.components || {}, { Text, Button }),
         showToast: message => {
-            attach();
+            if (!Native) resolveHost();
             if (Native && Native.Alert && typeof Native.Alert.alert === "function") Native.Alert.alert("Korg", String(message));
             else update({ notice: String(message) });
         } });

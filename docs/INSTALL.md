@@ -75,11 +75,11 @@ The loader reads only the bundled UTF-8 JavaScript resource (`KorgResources.bund
 
 ## Controls and recovery
 
-If host attachment succeeds, the runtime wraps the React Native root registration and provides a floating **K** control opening Korg's own settings. Separately, the native loader shows a small floating **Korg** button that opens a diagnostics alert with a Copy button; it works even when the JavaScript side fails to attach. The alert lists:
+If host attachment succeeds, the runtime installs a wrapper through React Native's `AppRegistry.setWrapperComponentProvider` (which applies to every app when it starts, whenever it was registered) and provides a floating **K** control opening Korg's own settings. Saved preferences and plugins load once the app starts. Separately, the native loader shows a small floating **Korg** button that opens a diagnostics alert with a Copy button; it works even when the JavaScript side fails to attach. The alert lists:
 
 - `layout`: whether Discord's JavaScript engine interface is the one this loader was built for (it refuses to run otherwise, leaving stock Discord untouched);
-- `reporter`, `resource` and `evaluation`: whether the loader installed its reporting function, found `korg.js`, and ran it without a JavaScript error;
-- `runtime` and `runtime status`: what Korg's own JavaScript last reported, such as how many Metro modules it has seen and why the K control is not attached yet;
+- `reporter`, `storage`, `resource` and `evaluation`: whether the loader installed its reporting and storage functions, found `korg.js`, and ran it without a JavaScript error;
+- `runtime status`: Korg's own account of where it got to, refreshed whenever it changes: the Metro hooks and module count; whether React, react-native and the AppRegistry were found (and how); whether the wrapper is installed; which apps registered and which ran; whether the K overlay rendered and mounted (`phase=waiting`, `captured`, `wrapped`, `rendered`); the storage in use; and any note on why something is missing;
 - **JavaScript errors**: every error Korg's JavaScript caught, including uncaught errors, plugin load failures and errors thrown while the bootstrap script ran, with their stack traces;
 - **Previous launch**: the last messages and errors from the launch before this one, which is where a crash leaves its last words.
 

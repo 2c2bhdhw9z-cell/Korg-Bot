@@ -4,8 +4,9 @@
     const MAX_TEXT = 3000;
     const MAX_ERRORS = 20;
     const MAX_NATIVE_MESSAGES = 200;
+    const MAX_STATUS_MESSAGES = 600;
     let nativeMessages = 0;
-    let statusCalls = 0;
+    let statusMessages = 0;
     let lastStatus = "";
 
     // Turns anything thrown into readable text. Never throws.
@@ -22,24 +23,27 @@
 
     // The native loader installs __KORG_NATIVE__.report before this file runs. It is absent in tests and the browser
     // preview, and reporting must never be able to break the runtime.
+    function deliver(kind, text) {
+        const bridge = root.__KORG_NATIVE__;
+        if (!bridge || typeof bridge.report !== "function") return false;
+        bridge.report(`${kind}\n${String(text).slice(0, MAX_TEXT)}`);
+        return true;
+    }
     const native = {
         send(kind, text) {
             try {
-                const bridge = root.__KORG_NATIVE__;
-                if (!bridge || typeof bridge.report !== "function" || nativeMessages >= MAX_NATIVE_MESSAGES) return;
-                nativeMessages += 1;
-                bridge.report(`${kind}\n${String(text).slice(0, MAX_TEXT)}`);
+                if (nativeMessages >= MAX_NATIVE_MESSAGES) return;
+                if (deliver(kind, text)) nativeMessages += 1;
             } catch (_) { /* Diagnostics are best effort. */ }
         },
-        // Status snapshots arrive on every Metro call, so only forced ones and every 256th are sent, and only when changed.
-        status(snapshot, force) {
-            statusCalls += 1;
-            if (force !== true && (statusCalls & 255) !== 0) return;
+        // The status text is sent whenever it differs from the last one sent, so what the diagnostics screen shows is
+        // always the latest state. (An earlier build sampled every 256th report, and the screen showed stale state.)
+        // Status messages have their own budget so a burst of errors can never crowd them out.
+        status(text) {
             try {
-                const text = JSON.stringify(snapshot);
-                if (text === lastStatus) return;
-                lastStatus = text;
-                native.send("status", text);
+                const value = String(text);
+                if (value === lastStatus || statusMessages >= MAX_STATUS_MESSAGES) return;
+                if (deliver("status", value)) { lastStatus = value; statusMessages += 1; }
             } catch (_) { /* Diagnostics are best effort. */ }
         },
     };

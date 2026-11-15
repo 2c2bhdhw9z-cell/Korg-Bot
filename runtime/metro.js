@@ -13,6 +13,10 @@
     const seen = new Set();
     let lastError;
     let scanning = false;
+    let announced = 0;
+    // Modules the UI identified for certain (the real React, the real react-native). Lookups by shape can match a
+    // different module that happens to export the same names, so the identified ones win.
+    const preferred = {};
     const looksLikeExports = value => value !== null && (typeof value === "object" || typeof value === "function");
 
     function record(value) {
@@ -32,6 +36,8 @@
         if (!looksLikeExports(value) || notifying.has(value) || (!completed && notified.has(value))) return;
         notified.add(value);
         notifying.add(value);
+        // Keep the diagnostics screen current without reporting on every module.
+        if (++announced % 100 === 0 && K.reportStatus) { try { K.reportStatus(); } catch (error) { lastError = error; } }
         try {
             for (const listener of Array.from(listeners)) {
                 try { listener(value); } catch (error) { lastError = error; }
@@ -83,7 +89,7 @@
                 record(result);
                 notify(result);
             }
-            if (K.reportStatus) K.reportStatus(first);
+            if (first && K.reportStatus) K.reportStatus(true);
             return result;
         };
         byName.set(name, wrapped);
@@ -199,7 +205,7 @@
         Object.defineProperty(common, name, {
             enumerable: true,
             get() {
-                const found = findByProps(...candidates);
+                const found = preferred[name] || findByProps(...candidates);
                 if (!found) throw new Error(`Korg Metro module unavailable: ${name}`);
                 return found;
             },
@@ -214,13 +220,28 @@
         }
         return { moduleCount: records.size, hooks: active, error: lastError ? String(lastError.message || lastError) : null };
     }
+    function bucket(count) { return count < 100 ? String(count) : `${Math.floor(count / 100) * 100}+`; }
+    // The lines the diagnostics screen shows under "runtime status". Counts are rounded so the text only changes when
+    // something meaningful does (the native bridge sends a status only when its text differs from the last one).
+    function statusText(snapshot) {
+        const metro = snapshot.metro;
+        const lines = [`Metro: hooks __d=${metro.hooks.__d ? "yes" : "no"} __r=${metro.hooks.__r ? "yes" : "no"}, modules seen ${bucket(metro.moduleCount)}${metro.error ? `, Metro error: ${metro.error}` : ""}`];
+        if (K.ui && typeof K.ui.describe === "function") { try { lines.push(...K.ui.describe()); } catch (error) { lines.push(`UI status unavailable: ${String(error && error.message || error)}`); } }
+        else lines.push("UI: not loaded");
+        lines.push(`Storage: ${snapshot.storage}`);
+        lines.push(`Errors recorded by Korg: ${snapshot.errors}`);
+        return lines.join("\n");
+    }
     K.reportStatus = function (force) {
-        const snapshot = { metro: status(), ui: K.ui && K.ui.status ? K.ui.status() : { phase: "waiting" }, errors: K.errors ? K.errors.length : 0 };
+        let storage = "unknown";
+        try { storage = K.storage ? (K.storage.source || K.storage.status) : "not loaded"; } catch (error) { storage = `error: ${String(error && error.message || error)}`; }
+        const snapshot = { metro: status(), ui: K.ui && K.ui.status ? K.ui.status() : { phase: "waiting" }, errors: K.errors ? K.errors.length : 0, storage };
         globalThis.__KORG_DIAGNOSTICS__ = snapshot;
-        if (K.native && typeof K.native.status === "function") K.native.status(snapshot, force === true);
+        if (K.native && typeof K.native.status === "function") K.native.status(statusText(snapshot), force === true);
         return snapshot;
     };
-    K.metro = { status, install, refresh: getAll, getAll, find, findByProps, findByName, findByStoreName, common, subscribe, get lastError() { return lastError; } };
+    function prefer(name, value) { if (value) preferred[name] = value; }
+    K.metro = { status, install, refresh: getAll, getAll, find, findByProps, findByName, findByStoreName, common, subscribe, prefer, get lastError() { return lastError; } };
     install();
     K.reportStatus(true);
 })(globalThis.__KORG_INTERNAL__);

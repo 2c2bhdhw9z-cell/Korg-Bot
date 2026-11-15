@@ -71,11 +71,11 @@ The only native-created global is immutable `globalThis.__KORG_NATIVE__`:
 - `name`: `KorgOriginalLoader`
 - `version`: `0.2.0-native-original`
 - `abi`: `jsi-0.86-apple-arm64-v2`
-- `storage`: `host` (a capability choice, not an AsyncStorage implementation)
 - `report(string)`: the native reporting function described above (absent if it could not be installed)
+- `storage(operation, key, value)`: the native key/value store described below (absent if it could not be installed)
 - `log(...args)`: forwards to an available host JavaScript console
 
-The JS runtime supplies persistence using host AsyncStorage when available, plugin handling, Metro interception, and a React Native AppRegistry root wrapper/floating launch entry. There is no native storage module, networking, bundle downloader, settings controller, or private decryption code. The only script input is UTF-8 `KorgResources.bundle/korg.js` under the application's bundle directory (up to 32 MiB). The global also guards repeat bootstrap evaluation within one runtime.
+The JS runtime supplies plugin handling, Metro interception, and a React Native AppRegistry root wrapper/floating launch entry. Persistence comes from the native `storage` function below, because Discord 353 contains no AsyncStorage: the only objects in its modules shaped like one (`getItem`/`setItem`/`removeItem`) are a Zustand persist adapter whose `getItem` returns objects, which an earlier Korg picked up and then failed to parse (`JSON Parse error: Unexpected character: o`). There is no networking, bundle downloader, settings controller, or private decryption code. The only script input is UTF-8 `KorgResources.bundle/korg.js` under the application's bundle directory (up to 32 MiB). The global also guards repeat bootstrap evaluation within one runtime.
 
 ## Build and evidence
 
@@ -104,3 +104,20 @@ Copyright (c) Korg contributors
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Native storage function
+
+`korg::installStorage` defines `globalThis.__korgNativeStorage(operation, key, value)` before the bootstrap script runs; the script moves it into the frozen `__KORG_NATIVE__.storage` and deletes the global. Strings in, strings out:
+
+| operation | result |
+| --- | --- |
+| `"get"`, key | the stored string, or `undefined` when there is none (an empty string is a value) |
+| `"set"`, key, value | `undefined` on success, otherwise a string saying why it failed |
+| `"remove"`, key | `undefined` on success (also when the key does not exist), otherwise the reason |
+| `"keys"` | a JSON array of every stored key |
+
+Anything else, or arguments of the wrong type, returns `undefined` or a reason string; no exception crosses back into the engine. The function needs one more virtual-table slot than the reporter, `createStringFromUtf8` (slot 34), which sits between slots that the layout check already verifies. On a device each key is one JSON file named by the SHA-256 of the key, holding `{"key":…,"value":…}`, in `Application Support/Korg/storage`, written atomically. The test harness supplies the same four operations over a map, so the real engine exercises the real function.
+
+## Diagnostics text
+
+The runtime formats the `runtime status` lines itself and the loader keeps them verbatim. They are sent whenever they change (an earlier build sent only every 256th report, so the screen could show stale state): the Metro hooks and a rounded module count; whether React, react-native and the AppRegistry were found and how; whether the wrapper is installed, which apps registered and ran; the overlay phase (`waiting`, `captured`, `wrapped`, `rendered`) with whether it mounted; the storage in use; and the number of recorded errors.

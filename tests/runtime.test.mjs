@@ -366,17 +366,33 @@ function hostFixture() {
     const registrations = new Map();
     const effects = [];
     let renders = 0;
+    class Component { constructor(props) { this.props = props; } }
     const React = {
-        createElement(type, props, ...children) { return { type, props: { ...props, children } }; },
+        Component,
+        // Like React's: children passed in `props` are kept unless children are given as arguments.
+        createElement(type, props, ...children) { return { type, props: { ...props, ...(children.length ? { children: children.length > 1 ? children : children[0] } : {}) } }; },
         useState: () => [0, () => { renders++; }],
         useEffect(callback) { const cleanup = callback(); if (cleanup) effects.push(cleanup); },
     };
     const Native = Object.fromEntries(["View", "Text", "Switch", "Modal", "SafeAreaView", "ScrollView", "TextInput", "Pressable"].map(name => [name, ({ native: name })]));
+    // AppRegistry as React Native 0.86 ships it: a namespace of functions that read the wrapper provider whenever an
+    // app starts, so a wrapper installed after registerComponent still applies.
+    let wrapperProvider;
     const appProviders = new Map();
-    Native.AppRegistry = {
+    const AppRegistry = {
         registerComponent(name, provider) { registrations.set(name, provider); appProviders.set(name, provider); return name; },
-        runApplication(name, props) { const Root = appProviders.get(name)(); return React.createElement(Root, props); },
+        getAppKeys() { return [...appProviders.keys()]; },
+        setWrapperComponentProvider(provider) { wrapperProvider = provider; },
+        runApplication(name, params) {
+            const Root = appProviders.get(name)();
+            const Wrapper = wrapperProvider && wrapperProvider(params);
+            const root = React.createElement(Root, params);
+            return Wrapper ? React.createElement(Wrapper, params, root) : root;
+        },
     };
+    // react-native's index: every export is a lazy getter, and none may be read until it is needed.
+    const reactNative = {};
+    for (const [name, value] of Object.entries({ ...Native, AppRegistry })) Object.defineProperty(reactNative, name, { enumerable: true, get: () => value });
     function require(id) { return records.get(id)?.publicModule.exports; }
     require.getModules = () => records;
     function define(factory, id) {
@@ -385,7 +401,9 @@ function hostFixture() {
         records.set(id, { publicModule: module, isInitialized: true });
     }
     function publish(context, id, exports) { context.__d((_global, _require, _default, _all, module) => { module.exports = exports; }, id); }
-    return { React, Native, records, registrations, effects, get renders() { return renders; }, require, define, publish };
+    // The ids Discord's modules would have: React, react-native's index, and the AppRegistry namespace.
+    const publishAll = context => { publish(context, 2, React); publish(context, 3, reactNative); publish(context, 4, AppRegistry); };
+    return { React, Native, AppRegistry, reactNative, records, registrations, effects, get renders() { return renders; }, require, define, publish, publishAll };
 }
 
 test("full runtime loads a real URL plugin, uses its persisted settings, patches, themes, and late UI capture", async () => {
@@ -418,22 +436,29 @@ test("full runtime loads a real URL plugin, uses its persisted settings, patches
     }
     const original = { run(value) { return value * 2; } };
     host.publish(context, 1, original);
-    host.publish(context, 2, { createElement: host.React.createElement, useState: host.React.useState, useEffect: host.React.useEffect });
     assert.equal(context.window.vendetta, context.window.bunny);
     assert.equal(typeof context.window.vendetta.storage.createStorage, "function");
-    host.publish(context, 3, { ...host.Native, AppRegistry: host.Native.AppRegistry });
-    const rootRegistration = host.Native.AppRegistry.registerComponent("Root", () => function Root() {});
-    assert.equal(rootRegistration, "Root");
-    const overlayElement = host.Native.AppRegistry.runApplication("Root", {});
-    assert.equal(overlayElement.type.name, "KorgOverlay");
-    const renderedRoot = overlayElement.type(overlayElement.props);
-    assert.equal(renderedRoot.type.name, "Overlay");
+    assert.equal(K.ui.status().attached, false);
+    host.publishAll(context);
+    assert.equal(K.ui.status().attached, true);
+    assert.equal(K.ui.status().registry, "module");
+    // The app registers and starts after Korg attached; Korg's wrapper is what React renders around it.
+    assert.equal(host.AppRegistry.registerComponent("Root", () => function Root() {}), "Root");
+    const wrapped = host.AppRegistry.runApplication("Root", {});
+    assert.equal(wrapped.type.name, "KorgWrapper");
+    assert.equal(wrapped.props.children.type.name, "Root");
     assert.equal(K.ui.status().rootWrapped, true);
-    assert.equal(renderedRoot.type(renderedRoot.props).type, host.Native.View);
+    const overlay = wrapped.type(wrapped.props);
+    assert.equal(overlay.type.name, "Overlay");
+    const rendered = overlay.type(overlay.props);
+    assert.equal(rendered.type, host.Native.View);
+    assert.equal(rendered.props.children[0].type.name, "Root", "the app is rendered beside Korg's controls");
+    assert.equal(K.ui.status().phase, "rendered");
+    assert.equal(K.ui.status().mounted, true);
     assert.equal(context.window.vendetta.ui.components.View, host.Native.View);
     assert.equal(host.registrations.size, 1);
     K.ui.openSettings();
-    host.Native.AppRegistry.runApplication("Root", {});
+    host.AppRegistry.runApplication("Root", {});
     assert.ok(host.renders > 0);
     const installed = await K.plugins.install("https://plugins.test/real.js", { kind: "bundle" });
     assert.equal(installed.enabled, false);
@@ -458,21 +483,115 @@ test("full runtime loads a real URL plugin, uses its persisted settings, patches
     assert.equal(reload.K.plugins.list()[0].enabled, false);
 });
 
-test("runtime boot captures AppRegistry before registration and UI survives late React Native capture", async () => {
+test("the wrapper works whichever host module loads first, and for an app registered before Korg attached", async () => {
+    for (const order of [[2, 3, 4], [4, 3, 2], [3, 4, 2]]) {
+        const host = hostFixture();
+        const { K, context } = await runtime({ __r: host.require, __d: host.define }, modules);
+        for (const name of ["themes", "plugins", "ui", "start"]) {
+            vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), context);
+        }
+        K.ui.initialize();
+        assert.equal(K.runtime.ready, false);
+        // Discord registers its root early; the registry is captured only afterwards.
+        host.AppRegistry.registerComponent("Discord", () => function Discord() {});
+        const parts = { 2: host.React, 3: host.reactNative, 4: host.AppRegistry };
+        for (const id of order) host.publish(context, id, parts[id]);
+        assert.equal(K.ui.status().attached, true, `attached after publishing in order ${order}`);
+        assert.deepEqual(plain(K.ui.status().registered), ["Discord"], "an app registered earlier is listed");
+        const wrapped = host.AppRegistry.runApplication("Discord", {});
+        assert.equal(wrapped.type.name, "KorgWrapper", "the wrapper applies to the app registered before attaching");
+        assert.deepEqual(plain(K.ui.status().ran), ["Discord"]);
+        await K.runtime.boot;
+        assert.equal(K.runtime.ready, true);
+    }
+});
+
+test("attaching costs nothing per module, and the registry global is captured when it is assigned", async () => {
+    const host = hostFixture();
+    const { K, context } = await runtime({ __r: host.require, __d: host.define }, modules);
+    let enumerations = 0;
+    const getAll = K.metro.getAll;
+    K.metro.getAll = (...args) => { enumerations += 1; return getAll.apply(K.metro, args); };
+    for (const name of ["themes", "plugins", "ui", "start"]) {
+        vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), context);
+    }
+    const afterStart = enumerations;
+    for (let id = 100; id < 3100; id++) host.publish(context, id, { id, helper() {} });
+    assert.equal(enumerations, afterStart, "3,000 unrelated modules must not trigger a single module search");
+    assert.equal(K.ui.status().attached, false);
+    // React Native's AppRegistry module stores itself in a global; the assignment alone is enough to attach.
+    context.RN$AppRegistry = host.AppRegistry;
+    assert.equal(K.ui.status().attached, true);
+    assert.equal(K.ui.status().registry, "RN$AppRegistry");
+    const descriptor = Object.getOwnPropertyDescriptor(context, "RN$AppRegistry");
+    assert.ok("value" in descriptor && descriptor.value === host.AppRegistry && descriptor.writable, "the global is an ordinary property again, as the native side expects");
+    // A registry that already exists when Korg starts is found too.
+    const early = hostFixture();
+    const second = await runtime({ __r: early.require, __d: early.define, RN$AppRegistry: early.AppRegistry }, modules);
+    for (const name of ["themes", "plugins", "ui", "start"]) {
+        vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), second.context);
+    }
+    assert.equal(second.K.ui.status().registry, "RN$AppRegistry");
+});
+
+test("the heartbeat finds what module capture could not, and stops once the overlay is mounted", async () => {
+    const host = hostFixture();
+    const timers = [];
+    const { K, context } = await runtime({ __r: host.require, __d: host.define, setTimeout: callback => { timers.push(callback); return timers.length; } }, modules);
+    for (const name of ["themes", "plugins", "ui", "start"]) {
+        vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), context);
+    }
+    assert.equal(timers.length, 1, "one heartbeat is scheduled at start");
+    // React and react-native load, but the registry is only reachable through react-native's lazy AppRegistry export.
+    host.publish(context, 2, host.React);
+    host.publish(context, 3, host.reactNative);
+    assert.equal(K.ui.status().attached, false, "capturing a lazy getter must not read it");
+    timers.shift()();
+    assert.equal(K.ui.status().attached, true, "the heartbeat read the export from a safe place");
+    assert.equal(K.ui.status().registry, "react-native export");
+    assert.equal(timers.length, 1, "the heartbeat keeps going until the overlay is mounted");
+    host.AppRegistry.registerComponent("Root", () => function Root() {});
+    const wrapped = host.AppRegistry.runApplication("Root", {});
+    const overlay = wrapped.type(wrapped.props);
+    overlay.type(overlay.props);
+    assert.equal(K.ui.status().mounted, true);
+    timers.shift()();
+    assert.equal(timers.length, 0, "no further heartbeat once the overlay is mounted");
+});
+
+test("a failure inside Korg's controls cannot take the app down, and is reported", async () => {
     const host = hostFixture();
     const { K, context } = await runtime({ __r: host.require, __d: host.define }, modules);
     for (const name of ["themes", "plugins", "ui", "start"]) {
         vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), context);
     }
-    K.ui.initialize();
-    assert.equal(K.runtime.ready, false);
-    host.publish(context, 1, { ...host.Native, AppRegistry: host.Native.AppRegistry });
-    host.publish(context, 2, { createElement: host.React.createElement, useState: host.React.useState, useEffect: host.React.useEffect });
-    assert.equal(K.ui.initialize().attached, true);
-    assert.equal(host.Native.AppRegistry.registerComponent("LateRoot", () => function Root() {}), "LateRoot");
-    assert.ok(host.registrations.has("LateRoot"));
-    await K.runtime.boot;
-    assert.equal(K.runtime.ready, true);
+    host.publishAll(context);
+    host.AppRegistry.registerComponent("Root", () => function Root() {});
+    const wrapped = host.AppRegistry.runApplication("Root", {});
+    const overlay = wrapped.type(wrapped.props);
+    const rendered = overlay.type(overlay.props);
+    const guard = rendered.props.children[1];
+    assert.equal(typeof guard.type, "function", "the controls are inside an error boundary");
+    assert.notEqual(rendered.props.children[0], guard, "the app is not inside the boundary");
+    assert.deepEqual(plain(guard.type.getDerivedStateFromError(new Error("x"))), { failed: true });
+    const instance = new guard.type(guard.props);
+    assert.equal(instance.render(), guard.props.children, "healthy controls render");
+    instance.state = { failed: true };
+    assert.equal(instance.render(), null, "a failed overlay renders nothing");
+    instance.componentDidCatch(new RangeError("overlay blew up"));
+    assert.match(K.ui.status().overlayError, /overlay blew up/);
+    assert.ok(K.errors.some(entry => entry.text.includes("Korg overlay render error") && entry.text.includes("overlay blew up")));
+    // Without React the wrapper shows the app untouched instead of a blank screen.
+    const bareHost = hostFixture();
+    const bare = await runtime({ __r: bareHost.require, __d: bareHost.define }, modules);
+    for (const name of ["themes", "plugins", "ui"]) vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), bare.context);
+    bare.K.ui.initialize();
+    bare.context.RN$AppRegistry = bareHost.AppRegistry;
+    assert.equal(bare.K.ui.status().attached, true);
+    bareHost.AppRegistry.registerComponent("Root", () => function Root() {});
+    const bareWrapped = bareHost.AppRegistry.runApplication("Root", {});
+    assert.equal(bare.K.ui.status().react, false);
+    assert.equal(bareWrapped.type(bareWrapped.props), bareWrapped.props.children, "the app is returned untouched");
 });
 
 test("release require captures returned exports without getModules and repairs replaced hooks", async () => {
@@ -657,7 +776,7 @@ test("a native reporter that throws cannot break the runtime", async () => {
     const K = context.__KORG_INTERNAL__;
     assert.doesNotThrow(() => K.reportError("source", new Error("still recorded")));
     assert.equal(K.errors.length, 1);
-    assert.doesNotThrow(() => K.native.status({ ui: { phase: "waiting" } }, true));
+    assert.doesNotThrow(() => K.native.status("Metro: hooks __d=yes __r=yes"));
 });
 
 test("ErrorUtils is wrapped whether it already exists or appears later, and the host handler still runs", async () => {
@@ -683,4 +802,75 @@ test("ErrorUtils is wrapped whether it already exists or appears later, and the 
         assert.throws(() => vm.runInContext("ErrorUtils.getGlobalHandler()(new Error('default handler'), false)", fresh), /default handler/);
         assert.match(fresh.__KORG_INTERNAL__.errors[0].text, /^Uncaught error: Error: default handler/);
     }
+});
+
+test("the loader's native storage is the backend: round trip, keys, failures, and Discord's modules are never searched", async () => {
+    const files = new Map();
+    const native = { storage(operation, key, value) {
+        if (operation === "get") return files.has(key) ? files.get(key) : undefined;
+        if (operation === "set") { if (key.includes("fail")) return "disk full"; files.set(key, value); return undefined; }
+        if (operation === "remove") { files.delete(key); return undefined; }
+        if (operation === "keys") return JSON.stringify([...files.keys()]);
+        return "unknown";
+    } };
+    // Discord's Zustand persist adapter looks like AsyncStorage and returns objects. It must be ignored entirely.
+    const decoy = { getItem: () => ({ state: {} }), setItem() { throw new Error("the decoy must never be written"); }, removeItem() {} };
+    const hostModules = new Map([[1, { isInitialized: true, publicModule: { exports: decoy } }]]);
+    let enumerations = 0;
+    function hostRequire() {}
+    hostRequire.getModules = () => { enumerations += 1; return hostModules; };
+    const { K } = await runtime({ __r: hostRequire, __KORG_NATIVE__: native });
+    const baseline = enumerations;   // Metro's own scan when it installs its hooks
+    assert.equal(K.storage.status, "persistent");
+    assert.equal(K.storage.source, "native files");
+    const scope = K.storage.createScope("t");
+    await scope.AsyncStorage.setItem("a b", "1");
+    await scope.AsyncStorage.setItem("é中😀", "unicode ✓");
+    assert.equal(await scope.AsyncStorage.getItem("a b"), "1");
+    assert.equal(await scope.AsyncStorage.getItem("missing"), null);
+    assert.deepEqual(plain((await scope.AsyncStorage.getAllKeys()).sort()), ["a b", "é中😀"].sort());
+    await scope.AsyncStorage.removeItem("a b");
+    assert.equal(await scope.AsyncStorage.getItem("a b"), null);
+    await assert.rejects(scope.AsyncStorage.setItem("fail", "x"), /native storage write failed: disk full/);
+    const settings = await scope.createStorage("settings", { defaults: { n: 1 } });
+    settings.n = 2;
+    await settings.flush();
+    assert.deepEqual(JSON.parse(files.get("korg:t:settings")), { n: 2 });
+    assert.equal(enumerations, baseline, "Discord's modules are not searched when native storage exists");
+});
+
+test("a host object that returns non-strings is refused with a clear error instead of corrupting a read", async () => {
+    const persistAdapter = { getItem: () => ({ state: { volume: 1 } }), setItem() {}, removeItem() {} };
+    const hostModules = new Map([[1, { isInitialized: true, publicModule: { exports: persistAdapter } }]]);
+    function hostRequire() {}
+    hostRequire.getModules = () => hostModules;
+    const { K } = await runtime({ __r: hostRequire });
+    await assert.rejects(K.storage.AsyncStorage.getItem("x"), /non-string/);
+});
+
+test("diagnostics status is sent whenever it changes, never sampled away, and never repeated", async () => {
+    const sent = [];
+    const host = hostFixture();
+    const { K, context } = await runtime({ __r: host.require, __d: host.define, __KORG_NATIVE__: { report: text => sent.push(text) } }, modules);
+    for (const name of ["themes", "plugins", "ui", "start"]) {
+        vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), context);
+    }
+    const statuses = () => sent.filter(message => message.startsWith("status\n")).map(message => message.slice(7));
+    assert.ok(statuses().length >= 1, "a status is sent at start");
+    assert.match(statuses().at(-1), /React missing, react-native missing, AppRegistry missing/);
+    const before = statuses().length;
+    for (let call = 0; call < 5; call++) K.reportStatus();
+    assert.equal(statuses().length, before, "an unchanged status is not sent again");
+    host.publishAll(context);
+    assert.match(statuses().at(-1), /AppRegistry found \(module\)/);
+    assert.match(statuses().at(-1), /wrapper installed/);
+    host.AppRegistry.registerComponent("Root", () => function Root() {});
+    const wrapped = host.AppRegistry.runApplication("Root", {});
+    assert.match(statuses().at(-1), /apps registered: Root; apps run: Root/);
+    assert.match(statuses().at(-1), /phase=wrapped; not rendered/);
+    const overlay = wrapped.type(wrapped.props);
+    overlay.type(overlay.props);
+    assert.match(statuses().at(-1), /phase=rendered; rendered, mounted/);
+    assert.match(statuses().at(-1), /Storage: /);
+    assert.ok(statuses().every(text => text.length < 1500), "every status fits the diagnostics screen");
 });

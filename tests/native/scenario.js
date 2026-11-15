@@ -1,6 +1,6 @@
 // A stand-in for the parts of Discord that Korg touches, run inside a real Hermes engine AFTER Korg's bootstrap, the
 // same order the real app's bundle uses. It has Metro's define/require contract, React Native's lazily-evaluated module
-// exports, an AppRegistry, AsyncStorage, ErrorUtils, RN's string-based URL, and a small React-like renderer with hooks.
+// exports, an AppRegistry, ErrorUtils, RN's string-based URL, and a small React-like renderer with hooks.
 //
 // Every check reports through the native function Korg's loader installs, so a failure here is visible exactly where it
 // would be on a device. Run by tests/native-hermes.test.mjs; not part of the app.
@@ -139,7 +139,14 @@
     const press = label => { const node = pressableWithText(label); if (!node) throw new Error(`No button labelled ${label}`); node.props.onPress(); };
     const React = { createElement, useState, useEffect };
 
-    // ---- React Native's module, with lazily-evaluated exports like the real index.js ---------------------------------------
+    // ---- Discord 353's module graph, as read out of its bytecode ------------------------------------------------------------
+    //  * react-native's index is an object of lazy getters; `get AppRegistry()` is `require(<AppRegistry module>).AppRegistry`.
+    //  * The AppRegistry module requires AppRegistryImpl (a namespace of plain functions that read the wrapper provider each
+    //    time an app runs), registers LogBox, assigns the namespace to global.RN$AppRegistry, and exports { AppRegistry }.
+    //  * Discord's entry module requires the index, calls registerComponent("Discord"), then replaces the app's runnable
+    //    with one that wraps the original (registerRunnable).
+    //  * Discord has no AsyncStorage. Its modules do contain a Zustand persist adapter with getItem/setItem/removeItem that
+    //    returns objects, which an earlier Korg picked as its storage and then failed to parse.
     const getterCalls = {};
     const hostComponent = name => function HostComponent(props) { return createElement(name, props); };
     const components = {
@@ -148,29 +155,21 @@
         Switch: hostComponent("Switch"),
         Modal: function Modal(props) { return props.visible ? createElement("Modal", props) : null; },
     };
-    const providers = new Map();
-    const AppRegistry = {
-        registerComponent(key, provider) { providers.set(key, provider); return key; },
-        getAppKeys() { return Array.from(providers.keys()); },
-    };
-    const ReactNative = {};
-    function lazy(name, value) { Object.defineProperty(ReactNative, name, { enumerable: true, get() { getterCalls[name] = (getterCalls[name] || 0) + 1; return value; } }); }
-    Object.keys(components).forEach(name => lazy(name, components[name]));
-    lazy("AppRegistry", AppRegistry);
+    const decoy = { reads: 0, writes: 0 };
+    const persistAdapter = { getItem() { decoy.reads++; return { state: { volume: 1 } }; }, setItem() { decoy.writes++; }, removeItem() { decoy.writes++; } };
 
-    // ---- AsyncStorage ---------------------------------------------------------------------------------------------------
-    const disk = new Map();
-    const AsyncStorage = {
-        getItem: async key => (disk.has(key) ? disk.get(key) : null),
-        setItem: async (key, value) => { disk.set(key, String(value)); },
-        removeItem: async key => { disk.delete(key); },
-        getAllKeys: async () => Array.from(disk.keys()),
-    };
+    // renderApplication + AppContainer, as react-native 0.86 has them: the wrapper component goes around the app.
+    function AppContainer(props) {
+        let inner = props.children;
+        if (props.WrapperComponent) inner = createElement(props.WrapperComponent, { initialProps: props.initialProps }, inner);
+        return createElement(components.View, { pointerEvents: "box-none" }, inner);
+    }
+    function renderApplication({ RootComponent, initialProps, WrapperComponent }) {
+        rootElement = createElement(AppContainer, { WrapperComponent, initialProps }, createElement(RootComponent, initialProps));
+        flush();
+    }
 
-    // ---- The app itself -------------------------------------------------------------------------------------------------
-    function DiscordApp() { return createElement(components.View, null, createElement(components.Text, null, "Discord channel list")); }
-
-    // ---- Metro. Use the real polyfill when the test supplies it, otherwise the same contract in a few lines. -------------------
+    // ---- Discord's Metro. Use the real polyfill when the test supplies it, otherwise the same contract in a few lines. ----
     if (typeof globalThis.__r !== "function") {
         const modules = new Map();
         const define = (factory, id, dependencyMap) => { if (!modules.has(id)) modules.set(id, { factory, dependencyMap, isInitialized: false, publicModule: { exports: {} } }); };
@@ -178,7 +177,7 @@
             const mod = modules.get(id);
             if (!mod) throw new Error(`Requiring unknown module "${id}"`);
             if (mod.isInitialized) return mod.publicModule.exports;
-            mod.isInitialized = true;
+            mod.isInitialized = true;   // like Metro: a module being initialized hands out its partial exports to re-entrant requires
             const module = mod.publicModule;
             const importDefault = other => { const value = metroRequire(other); return value && value.__esModule ? value.default : value; };
             mod.factory(globalThis, metroRequire, importDefault, metroRequire, module, module.exports, mod.dependencyMap);
@@ -187,33 +186,88 @@
         globalThis.__r = metroRequire;
         globalThis.__d = define;
     }
-    const ID = { react: 101, reactNative: 102, storage: 103, app: 104 };
+    const ID = { react: 101, reactNative: 102, appRegistry: 103, impl: 104, entry: 105, app: 106, persist: 107, fillers: 1000, fillerCount: 3000 };
+    let initialized = 0;
+    for (let index = 0; index < ID.fillerCount; index++) {
+        // Thousands of modules Korg has no interest in; only some ever run.
+        __d((g, r, i, a, module) => { initialized++; module.exports = { index, helper() { return index; } }; }, ID.fillers + index, []);
+    }
     __d((g, r, i, a, module) => { module.exports = React; }, ID.react, []);
-    __d((g, r, i, a, module) => { module.exports = ReactNative; }, ID.reactNative, []);
-    __d((g, r, i, a, module) => { module.exports = { __esModule: true, default: AsyncStorage }; }, ID.storage, []);
-    __d((g, r) => {
-        // Like Discord's entry point: pull in the framework, then register the root component.
-        const RN = r(ID.reactNative);
+    __d((g, r, i, a, module) => { module.exports = { __esModule: true, default: persistAdapter }; }, ID.persist, []);
+    // react-native's index: lazy getters only.
+    __d((g, r, i, a, module) => {
+        const index = {};
+        const lazy = (name, load) => Object.defineProperty(index, name, { enumerable: true, get() { getterCalls[name] = (getterCalls[name] || 0) + 1; return load(); } });
+        Object.keys(components).forEach(name => lazy(name, () => components[name]));
+        lazy("AppRegistry", () => r(ID.appRegistry).AppRegistry);
+        module.exports = index;
+    }, ID.reactNative, []);
+    // AppRegistryImpl: loads a pile of other modules first (each completing while this one is still initializing), then
+    // exports a namespace of plain functions.
+    const providers = new Map();
+    const runnables = {};
+    let wrapperComponentProvider;
+    __d((g, r, i, a, module, exports) => {
         r(ID.react);
-        RN.AppRegistry.registerComponent("Discord", () => DiscordApp);
-    }, ID.app, []);
+        for (let index = 0; index < 60; index++) r(ID.fillers + index);
+        Object.defineProperty(exports, "__esModule", { value: true });
+        exports.setWrapperComponentProvider = provider => { wrapperComponentProvider = provider; };
+        exports.registerComponent = (key, provider) => {
+            providers.set(key, provider);
+            // The wrapper provider is read when the app RUNS, not when it is registered.
+            runnables[key] = appParameters => renderApplication({ RootComponent: provider(), initialProps: appParameters.initialProps,
+                WrapperComponent: wrapperComponentProvider && wrapperComponentProvider(appParameters) });
+            return key;
+        };
+        exports.registerRunnable = (key, run) => { runnables[key] = run; return key; };
+        exports.getAppKeys = () => Array.from(providers.keys());
+        exports.getRunnable = key => runnables[key];
+        exports.runApplication = (key, appParameters) => { if (!runnables[key]) throw new Error(`"${key}" has not been registered`); runnables[key](appParameters); };
+    }, ID.impl, []);
+    __d((g, r, i, a, module, exports) => {
+        Object.defineProperty(exports, "__esModule", { value: true });
+        const registry = a(ID.impl);
+        registry.registerComponent("LogBox", () => function NoOp() { return null; });
+        g.RN$AppRegistry = registry;
+        exports.AppRegistry = registry;
+    }, ID.appRegistry, []);
+    function DiscordApp() { return createElement(components.View, null, createElement(components.Text, null, "Discord channel list")); }
+    __d((g, r, i, a, module) => { module.exports = { __esModule: true, default: DiscordApp }; }, ID.app, []);
+    __d((g, r) => {
+        // Like Discord's entry point: polyfills first, then react-native's AppRegistry, then register and re-register.
+        for (let index = 100; index < 140; index++) r(ID.fillers + index);
+        const RN = r(ID.reactNative);
+        const AppRegistry = RN.AppRegistry;
+        AppRegistry.registerComponent("Discord", () => r(ID.app).default);
+        const original = AppRegistry.getRunnable("Discord");
+        AppRegistry.registerRunnable("Discord", (...args) => original(...args));
+        r(ID.persist);
+    }, ID.entry, []);
     globalThis.__greeter = { greet() { return "hello"; } };
 
     async function main() {
-        // 1. Starting the app registers its root through Korg's wrapper without losing it.
-        __r(ID.storage);
-        __r(ID.app);
-        check(AppRegistry.getAppKeys().join() === "Discord", "the app's own registerComponent still registers the root (not swallowed by a hook)");
-        const status = K.ui.status();
-        check(status.attached === true && status.rootWrapped === false || status.attached === true, `Korg attached to AppRegistry (phase=${status.phase})`);
-        const provider = providers.get("Discord");
-        const Root = provider();
-        rootElement = createElement(Root, {});
-        flush();
-        check(K.ui.status().rootWrapped === true, "the root component is wrapped");
-        check(find(node => node.host === "Text" && textOf(node) === "Discord channel list") !== null, "the app's own screen still renders inside Korg's wrapper");
+        // 1. Starting the app: the entry runs while Korg watches, then the native side starts it the way
+        //    AppRegistryBinding does: read global.RN$AppRegistry and call runApplication.
+        const getAllBefore = K.metro.getAll;
+        let enumerations = 0;
+        K.metro.getAll = (...args) => { enumerations++; return getAllBefore.apply(K.metro, args); };
+        __r(ID.entry);
+        check(initialized >= 100, `the entry initialized ${initialized} filler modules while Korg watched`);
+        check(enumerations === 0, `no module search happened while ${initialized} modules loaded (searches: ${enumerations})`);
+        check(K.ui.status().attached === true && K.ui.status().registry !== "", `Korg attached to AppRegistry (${K.ui.status().registry}), phase=${K.ui.status().phase}`);
+        check(K.ui.status().react === true && K.ui.status().reactNative === true, "React and react-native were recognised");
+        check(!getterCalls.AppRegistry || getterCalls.AppRegistry === 1, `react-native's AppRegistry getter was read only by the app itself (${getterCalls.AppRegistry || 0} read)`);
+        check(globalThis.RN$AppRegistry === globalThis.__r(ID.appRegistry).AppRegistry, "global.RN$AppRegistry is still the registry the app gets, for the native side to call");
+        check(Object.getOwnPropertyDescriptor(globalThis, "RN$AppRegistry").value !== undefined, "RN$AppRegistry is an ordinary property after Korg's watch fired");
+        check(AppRegistryKeys() === "LogBox,Discord", `the app registered its root as usual (${AppRegistryKeys()})`);
+        function AppRegistryKeys() { return Array.from(providers.keys()).join(); }
+        globalThis.RN$AppRegistry.runApplication("Discord", { rootTag: 1, initialProps: {} });
+        check(K.ui.status().rootWrapped === true, "the wrapper provider was used when the app ran");
+        check(find(node => node.host === "Text" && textOf(node) === "Discord channel list") !== null, "the app's own screen still renders, inside Korg's wrapper");
         check(pressableWithText("K") !== null, "the K button is on screen");
-        check(Object.keys(getterCalls).length > 0 && getterCalls.AppRegistry >= 1, "react-native's lazy exports were read through getters only when needed");
+        check(K.ui.status().phase === "rendered" && K.ui.status().renders >= 1, `the overlay rendered (phase=${K.ui.status().phase})`);
+        check(K.ui.status().mounted === true, "the overlay's effects ran");
+        check(decoy.reads === 0 && decoy.writes === 0, `Discord's persist adapter was never used as storage (reads ${decoy.reads}, writes ${decoy.writes})`);
 
         // 2. Opening settings.
         press("K");
@@ -222,12 +276,16 @@
         check(pressableWithText("Install (disabled by default)") !== null, "the plugin install button is there");
         check(["graphite", "ember", "glacier", "orchard", "plum"].every(name => find(node => node.host === "Pressable" && textOf(node).replace("• ", "") === name)), "all palettes are listed");
 
-        // 3. Choosing a palette persists through the host's AsyncStorage and re-renders.
+        // 3. Choosing a palette persists through the loader's native storage and re-renders.
         press("plum");
         await new Promise(resolve => resolve());
         for (let spin = 0; spin < 10; spin++) await Promise.resolve();
         check(K.themes.current() === "plum", "selecting a palette changes the current palette");
-        check(Array.from(disk.keys()).some(key => key.indexOf("korg") >= 0), `the palette was saved to AsyncStorage (keys: ${Array.from(disk.keys()).join(", ")})`);
+        const nativeKeys = JSON.parse(globalThis.__KORG_NATIVE__.storage("keys", ""));
+        check(nativeKeys.some(key => key.indexOf("korg:korg.runtime.appearance:selected") === 0), `the palette was saved by the native storage (keys: ${nativeKeys.join(", ")})`);
+        check(globalThis.__KORG_NATIVE__.storage("get", nativeKeys.find(key => key.indexOf("appearance") >= 0)) === "plum", "and reads back as plum");
+        check(K.storage.source === "native files" && K.storage.status === "persistent", `Korg's storage is the loader's (${K.storage.source})`);
+        check(decoy.reads === 0 && decoy.writes === 0, "Discord's persist adapter is still untouched after saving preferences");
 
         // 4. Installing, enabling and disabling a plugin that patches the host.
         const item = await K.plugins.install(PLUGIN_URL, { kind: "bundle" });

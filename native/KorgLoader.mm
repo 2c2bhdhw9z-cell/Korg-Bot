@@ -95,6 +95,7 @@ constexpr size_t castInterface = 0;
 constexpr size_t evaluateJavaScript = 1;   // 2 prepareJavaScript, 3 evaluatePreparedJavaScript: do NOT call these
 constexpr size_t global = 6;
 constexpr size_t createPropNameIDFromAscii = 19;
+constexpr size_t createStringFromUtf8 = 34;   // String createStringFromUtf8(const uint8_t *, size_t)
 constexpr size_t utf8OfString = 36;        // std::string utf8(const String &)
 constexpr size_t setPropertyValueByName = 54;  // setPropertyValue(const Object &, const PropNameID &, const Value &)
 constexpr size_t createFunctionFromHostFunction = 79;
@@ -186,39 +187,132 @@ inline Sink &sinkSlot() {
   static Sink sink = nullptr;
   return sink;
 }
+
+// Reads argument `index` as a UTF-8 string. False when it is missing or is not a string.
+inline bool stringArgument(Runtime &runtime, const Value *args, size_t count, size_t index, std::string &out) {
+  if (index >= count || args[index].tag != kind::string) return false;
+  using Utf8 = std::string (*)(Runtime *, const Handle &);
+  // A String is just its handle, which sits in the Value's payload.
+  out = method<Utf8>(&runtime, slot::utf8OfString)(&runtime, *reinterpret_cast<const Handle *>(&args[index].payload));
+  return true;
+}
+
+// Builds a JavaScript string value. `text` must be valid UTF-8.
+inline Value makeString(Runtime &runtime, const std::string &text) {
+  using Create = Handle (*)(Runtime *, const uint8_t *, size_t);
+  Handle handle = method<Create>(&runtime, slot::createStringFromUtf8)(
+      &runtime, reinterpret_cast<const uint8_t *>(text.data()), text.size());
+  return Value(kind::string, handle.take());
+}
+
 inline Value reportEntry(Runtime &runtime, const Value &, const Value *args, size_t count) {
   try {
-    if (count > 0 && args[0].tag == kind::string) {
-      using Utf8 = std::string (*)(Runtime *, const Handle &);
-      // A String is just its handle, which sits in the Value's payload.
-      std::string text = method<Utf8>(&runtime, slot::utf8OfString)(
-          &runtime, *reinterpret_cast<const Handle *>(&args[0].payload));
+    std::string text;
+    if (stringArgument(runtime, args, count, 0, text))
       if (Sink sink = sinkSlot()) sink(text);
-    }
   } catch (...) {
     // An exception must never cross back into the engine from a diagnostics call.
   }
   return Value();
 }
 
-// Defines globalThis[property] as a native function taking one string.
-inline void installReporter(Runtime *runtime, const char *property, Sink sink) {
+// Persistent key/value storage that the loader provides to the JavaScript runtime. Discord has no AsyncStorage of its
+// own to borrow, and anything the runtime found in Discord's modules could be wiped by the app, so Korg keeps its
+// own. Implementations are supplied by the platform code (files on a device, a map in the test harness).
+struct Storage {
+  bool (*get)(const std::string &key, std::string &value);                  // false when the key does not exist
+  std::string (*set)(const std::string &key, const std::string &value);     // "" on success, otherwise the reason
+  std::string (*remove)(const std::string &key);                            // "" on success, otherwise the reason
+  std::string (*keys)();                                                    // a JSON array of every key
+};
+inline const Storage *&storageSlot() {
+  static const Storage *storage = nullptr;
+  return storage;
+}
+
+// storage(operation, key, value): one native function, so the JavaScript side has one thing to look for.
+//   "get"    -> the stored string, or undefined when there is none
+//   "set"    -> undefined on success, otherwise a string describing the failure
+//   "remove" -> undefined on success, otherwise a string describing the failure
+//   "keys"   -> a JSON array of the stored keys
+inline Value storageEntry(Runtime &runtime, const Value &, const Value *args, size_t count) {
+  try {
+    const Storage *storage = storageSlot();
+    std::string operation, key, value;
+    if (!stringArgument(runtime, args, count, 0, operation)) return Value();
+    if (!storage) return makeString(runtime, "native storage is not installed");
+    stringArgument(runtime, args, count, 1, key);
+    if (operation == "get") {
+      std::string stored;
+      return storage->get(key, stored) ? makeString(runtime, stored) : Value();
+    }
+    if (operation == "set") {
+      if (!stringArgument(runtime, args, count, 2, value)) return makeString(runtime, "the value must be a string");
+      std::string failure;
+      try { failure = storage->set(key, value); } catch (...) { failure = "native storage threw an exception"; }
+      return failure.empty() ? Value() : makeString(runtime, failure);
+    }
+    if (operation == "remove") {
+      std::string failure;
+      try { failure = storage->remove(key); } catch (...) { failure = "native storage threw an exception"; }
+      return failure.empty() ? Value() : makeString(runtime, failure);
+    }
+    if (operation == "keys") {
+      std::string listing;
+      try { listing = storage->keys(); } catch (...) { listing = "[]"; }
+      return makeString(runtime, listing);
+    }
+    return makeString(runtime, "unknown storage operation");
+  } catch (...) {
+    return Value();  // Never let an exception cross back into the engine.
+  }
+}
+
+// Defines globalThis[property] as a native function.
+inline void installFunction(Runtime *runtime, const char *property, unsigned parameters, HostFunction function) {
   using Global = Handle (*)(Runtime *);
   using PropName = Handle (*)(Runtime *, const char *, size_t);
   using Create = Handle (*)(Runtime *, const Handle &, unsigned int, HostFunction);
   using SetProperty = void (*)(Runtime *, const Handle &, const Handle &, const Value &);
-  sinkSlot() = sink;
   Handle global = method<Global>(runtime, slot::global)(runtime);
   Handle name = method<PropName>(runtime, slot::createPropNameIDFromAscii)(runtime, property, std::strlen(property));
-  Handle function = method<Create>(runtime, slot::createFunctionFromHostFunction)(runtime, name, 1, HostFunction(&reportEntry));
-  Value value(kind::object, function.take());
+  Handle created = method<Create>(runtime, slot::createFunctionFromHostFunction)(runtime, name, parameters, std::move(function));
+  Value value(kind::object, created.take());
   method<SetProperty>(runtime, slot::setPropertyValueByName)(runtime, global, name, value);
+}
+inline void installReporter(Runtime *runtime, const char *property, Sink sink) {
+  sinkSlot() = sink;
+  installFunction(runtime, property, 1, HostFunction(&reportEntry));
+}
+inline void installStorage(Runtime *runtime, const char *property, const Storage *storage) {
+  storageSlot() = storage;
+  installFunction(runtime, property, 3, HostFunction(&storageEntry));
+}
+
+// The script that runs before the Korg bundle: it takes the two native functions off the global object (so they are not
+// left lying around under their raw names) and hands them to the runtime as one frozen, non-enumerable global. The bundle is appended after it,
+// followed by "\n}();\n". The test harness uses this same text, so a mistake here shows up in the tests.
+inline const char *bootstrapPrefix() {
+  return R"JS(void function(){
+var report=globalThis.__korgNativeReport;
+var storage=globalThis.__korgNativeStorage;
+try{delete globalThis.__korgNativeReport}catch(_){}
+try{delete globalThis.__korgNativeStorage}catch(_){}
+if(globalThis.__KORG_NATIVE__)return;
+Object.defineProperty(globalThis,'__KORG_NATIVE__',{value:Object.freeze({
+name:'KorgOriginalLoader',version:'0.2.0-native-original',abi:'jsi-0.86-apple-arm64-v2',
+report:typeof report==='function'?report:undefined,
+storage:typeof storage==='function'?storage:undefined,
+log:function(){if(globalThis.console)console.log.apply(console,arguments)}
+}),configurable:false,writable:false});
+)JS";
 }
 }  // namespace korg
 
 #ifndef KORG_ABI_TEST
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <CommonCrypto/CommonDigest.h>
 #include <dispatch/dispatch.h>
 
 // Objective-C declarations must remain at global scope.
@@ -274,23 +368,9 @@ struct Crumb {
   explicit Crumb(NSString *phase) { breadcrumb(phase); }
   ~Crumb() { breadcrumb(nil); }
 };
-static NSString *flag(id value) { return [value respondsToSelector:@selector(boolValue)] && [value boolValue] ? @"yes" : @"no"; }
-static NSString *summarize(NSString *json) {
-  NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
-  id parsed = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-  if (![parsed isKindOfClass:[NSDictionary class]]) return clip(json, 400);
-  NSDictionary *root = parsed;
-  NSDictionary *metro = [root[@"metro"] isKindOfClass:[NSDictionary class]] ? root[@"metro"] : @{};
-  NSDictionary *hooks = [metro[@"hooks"] isKindOfClass:[NSDictionary class]] ? metro[@"hooks"] : @{};
-  NSDictionary *ui = [root[@"ui"] isKindOfClass:[NSDictionary class]] ? root[@"ui"] : @{};
-  NSMutableString *line = [NSMutableString string];
-  [line appendFormat:@"Metro hooks __d=%@ __r=%@, modules seen: %@", flag(hooks[@"__d"]), flag(hooks[@"__r"]),
-      metro[@"moduleCount"] ?: @0];
-  if ([metro[@"error"] isKindOfClass:[NSString class]]) [line appendFormat:@", Metro error: %@", metro[@"error"]];
-  [line appendFormat:@"\nUI phase=%@ attached=%@ root wrapped=%@", ui[@"phase"] ?: @"?", flag(ui[@"attached"]), flag(ui[@"rootWrapped"])];
-  if ([ui[@"reason"] isKindOfClass:[NSString class]]) [line appendFormat:@"\nUI note: %@", ui[@"reason"]];
-  return line;
-}
+// The runtime formats its own status lines (what it found, what it patched, whether the overlay rendered), so the
+// native side only has to keep them.
+static NSString *summarize(NSString *text) { return clip(text, 1800); }
 // Runs on the JavaScript thread whenever the Korg runtime calls the installed native function.
 static void javaScriptReport(const std::string &message) {
   @autoreleasepool {
@@ -306,6 +386,106 @@ static void javaScriptReport(const std::string &message) {
     else if ([kind isEqualToString:@"boot"]) report(@"runtime", clip(body, 400));
   }
 }
+// ---- Persistent key/value storage for the JavaScript runtime ---------------------------------------------------------
+// One small JSON file per key, named by the SHA-256 of the key (keys can be long URLs), holding {"key":...,"value":...}.
+// Files live in Application Support/Korg/storage and are replaced atomically, so a crash never leaves half a value.
+static NSObject *storageLock;
+static NSString *storageDirectory() {
+  static NSString *directory;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    NSString *base = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+    if (!base) base = NSTemporaryDirectory();
+    directory = [[base stringByAppendingPathComponent:@"Korg"] stringByAppendingPathComponent:@"storage"];
+    storageLock = [NSObject new];
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
+  });
+  return directory;
+}
+static NSString *storagePath(NSString *key) {
+  NSData *bytes = [key dataUsingEncoding:NSUTF8StringEncoding];
+  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+  CC_SHA256(bytes.bytes, (CC_LONG)bytes.length, digest);
+  NSMutableString *name = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2 + 5];
+  for (int index = 0; index < CC_SHA256_DIGEST_LENGTH; ++index) [name appendFormat:@"%02x", digest[index]];
+  [name appendString:@".json"];
+  return [storageDirectory() stringByAppendingPathComponent:name];
+}
+static NSString *utf8String(const std::string &text) {
+  return [[NSString alloc] initWithBytes:text.data() length:text.size() encoding:NSUTF8StringEncoding];
+}
+static std::string standardString(NSString *text) {
+  // Not UTF8String: that stops at the first NUL, and a stored value may contain one.
+  NSData *bytes = [text dataUsingEncoding:NSUTF8StringEncoding];
+  return bytes.length ? std::string(static_cast<const char *>(bytes.bytes), bytes.length) : std::string();
+}
+static NSDictionary *storageRecord(NSString *path) {
+  NSData *data = [NSData dataWithContentsOfFile:path];
+  id parsed = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+  if (![parsed isKindOfClass:[NSDictionary class]]) return nil;
+  NSDictionary *record = parsed;
+  return [record[@"key"] isKindOfClass:[NSString class]] && [record[@"value"] isKindOfClass:[NSString class]] ? record : nil;
+}
+static bool nativeStorageGet(const std::string &key, std::string &value) {
+  @autoreleasepool {
+    NSString *name = utf8String(key);
+    if (!name) return false;
+    storageDirectory();
+    @synchronized(storageLock) {
+      NSDictionary *record = storageRecord(storagePath(name));
+      if (![record[@"key"] isEqualToString:name]) return false;  // missing, damaged, or another key's file
+      value = standardString(record[@"value"]);
+      return true;
+    }
+  }
+}
+static std::string nativeStorageSet(const std::string &key, const std::string &value) {
+  @autoreleasepool {
+    NSString *name = utf8String(key);
+    NSString *text = utf8String(value);
+    if (!name || !text) return "the key and value must be valid UTF-8";
+    storageDirectory();
+    NSError *error = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"key": name, @"value": text} options:0 error:&error];
+    if (!data) return standardString(error.localizedDescription ?: @"could not encode the value");
+    @synchronized(storageLock) {
+      if (![data writeToFile:storagePath(name) options:NSDataWritingAtomic error:&error])
+        return standardString(error.localizedDescription ?: @"could not write the file");
+    }
+    return "";
+  }
+}
+static std::string nativeStorageRemove(const std::string &key) {
+  @autoreleasepool {
+    NSString *name = utf8String(key);
+    if (!name) return "the key must be valid UTF-8";
+    storageDirectory();
+    NSError *error = nil;
+    @synchronized(storageLock) {
+      NSString *path = storagePath(name);
+      if ([[NSFileManager defaultManager] fileExistsAtPath:path] && ![[NSFileManager defaultManager] removeItemAtPath:path error:&error])
+        return standardString(error.localizedDescription ?: @"could not delete the file");
+    }
+    return "";
+  }
+}
+static std::string nativeStorageKeys() {
+  @autoreleasepool {
+    NSMutableArray *keys = [NSMutableArray array];
+    NSString *directory = storageDirectory();
+    @synchronized(storageLock) {
+      for (NSString *file in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:directory error:nil]) {
+        if (![file hasSuffix:@".json"]) continue;
+        NSDictionary *record = storageRecord([directory stringByAppendingPathComponent:file]);
+        if (record) [keys addObject:record[@"key"]];
+      }
+    }
+    NSData *data = [NSJSONSerialization dataWithJSONObject:keys options:0 error:nil];
+    return data ? standardString([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]) : std::string("[]");
+  }
+}
+static const korg::Storage kNativeStorage = {&nativeStorageGet, &nativeStorageSet, &nativeStorageRemove, &nativeStorageKeys};
+
 static NSString *diagnostics() {
   [diagnosticLock lock];
   NSDictionary *state = [diagnosticState copy];
@@ -315,7 +495,7 @@ static NSString *diagnostics() {
       @"Korg UI is a floating control; not yet a Discord settings row\n\n"];
   NSDictionary *info = [NSBundle mainBundle].infoDictionary;
   [text appendFormat:@"app: Discord %@ (%@)\n", info[@"CFBundleShortVersionString"] ?: @"?", info[@"CFBundleVersion"] ?: @"?"];
-  for (NSString *key in @[@"constructor", @"identity", @"safe mode", @"hook", @"callbacks", @"layout", @"reporter",
+  for (NSString *key in @[@"constructor", @"identity", @"safe mode", @"hook", @"callbacks", @"layout", @"reporter", @"storage",
                           @"resource", @"evaluation", @"runtime", @"runtime status", @"last error"]) {
     id value = state[key];
     if (!value && ([key isEqualToString:@"safe mode"] || [key isEqualToString:@"runtime status"])) continue;
@@ -457,19 +637,21 @@ void inject(void *runtime) {
         report(@"reporter", [NSString stringWithFormat:@"Not installed: %@", errorText(failure)]);
       }
     }
+    {
+      Crumb crumb(@"installing the native storage function");
+      try {
+        korg::installStorage(engine, "__korgNativeStorage", &kNativeStorage);
+        NSArray *stored = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:storageDirectory() error:nil];
+        report(@"storage", [NSString stringWithFormat:@"Installed (%lu saved item%s in Application Support/Korg/storage)",
+                            (unsigned long)stored.count, stored.count == 1 ? "" : "s"]);
+      } catch (const std::exception &failure) {
+        report(@"storage", [NSString stringWithFormat:@"Not installed: %@", errorText(failure)]);
+      }
+    }
     report(@"evaluation", @"Evaluating on runtime callback thread");
-    // The function body isolates local declarations; void forces undefined.
-    // The runtime owns storage and UI integration through the host's modules.
-    std::string source = R"JS(void function(){
-if(globalThis.__KORG_NATIVE__)return;
-var report=globalThis.__korgNativeReport;
-try{delete globalThis.__korgNativeReport}catch(_){}
-Object.defineProperty(globalThis,'__KORG_NATIVE__',{value:Object.freeze({
-name:'KorgOriginalLoader',version:'0.2.0-native-original',abi:'jsi-0.86-apple-arm64-v2',storage:'host',
-report:typeof report==='function'?report:undefined,
-log:function(){if(globalThis.console)console.log.apply(console,arguments)}
-}),configurable:false,writable:false});
-)JS";
+    // The function body isolates local declarations; void forces undefined. The runtime keeps its own preferences
+    // through the native storage function; it does not look for storage inside Discord's modules.
+    std::string source = korg::bootstrapPrefix();
     source.append(static_cast<const char *>(data.bytes), data.length);
     source.append("\n}();\n");
     {
@@ -594,7 +776,7 @@ __attribute__((constructor)) void start() {
     // Replace the persisted snapshot: previous launches must not look current.
     diagnosticState = [@{@"constructor": @"Loaded this session", @"identity": @"Checking",
         @"hook": @"Pending", @"callbacks": @0, @"resource": @"Not requested", @"layout": @"Not checked",
-        @"reporter": @"Not installed", @"evaluation": @"Not started", @"last error": @"None"} mutableCopy];
+        @"reporter": @"Not installed", @"storage": @"Not installed", @"evaluation": @"Not started", @"last error": @"None"} mutableCopy];
     if (safeMode) diagnosticState[@"safe mode"] = [NSString stringWithFormat:@"Korg skipped this launch because the last one ended while it was %@", interrupted];
     report(@"constructor", @"Loaded this session");
     // Match the executable as well as the ID: IPA signers may change the ID.

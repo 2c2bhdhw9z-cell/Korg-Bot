@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -31,6 +32,34 @@ static int failures = 0;
   } while (0)
 
 static void sink(const std::string &message) { messages.push_back(message); }
+
+// The loader's storage, as a map. On a device the same four functions write files.
+static std::map<std::string, std::string> memory;
+static bool memoryGet(const std::string &key, std::string &value) {
+  auto found = memory.find(key);
+  if (found == memory.end()) return false;
+  value = found->second;
+  return true;
+}
+static std::string memorySet(const std::string &key, const std::string &value) {
+  if (key == "fail-me") return "disk full";
+  memory[key] = value;
+  return "";
+}
+static std::string memoryRemove(const std::string &key) { memory.erase(key); return ""; }
+static std::string memoryKeys() {
+  std::string listing = "[";
+  bool first = true;
+  for (const auto &entry : memory) {
+    if (!first) listing += ",";
+    first = false;
+    listing += "\"";
+    for (char c : entry.first) { if (c == '"' || c == '\\') listing += '\\'; listing += c; }
+    listing += "\"";
+  }
+  return listing + "]";
+}
+static const korg::Storage testStorage = {&memoryGet, &memorySet, &memoryRemove, &memoryKeys};
 static void *lookup(const char *name) { return dlsym(RTLD_DEFAULT, name); }
 
 static std::string slurp(const char *path) {
@@ -108,6 +137,39 @@ int main(int argc, char **argv) {
   CHECK(messages.size() > 2 && messages[2].size() == 100000, "a 100,000-character message arrives whole");
   messages.clear();
 
+  // 5b. The native storage function: strings in, strings out, failures as text, and bad calls never crash.
+  korg::installStorage(runtime, "__korgNativeStorage", &testStorage);
+  CHECK(real->global().getProperty(*real, "__korgNativeStorage").isObject(), "the storage function is installed");
+  korg::evaluate(runtime,
+      "(function () {\n"
+      "  const s = globalThis.__korgNativeStorage, failures = [];\n"
+      "  const expect = (name, ok) => { if (!ok) failures.push(name); };\n"
+      "  expect('a missing key reads as undefined', s('get', 'nothing') === undefined);\n"
+      "  expect('set succeeds with undefined', s('set', 'k1', 'v1') === undefined);\n"
+      "  expect('get returns what was set', s('get', 'k1') === 'v1');\n"
+      "  s('set', 'empty', ''); expect('an empty value is not a missing key', s('get', 'empty') === '');\n"
+      "  s('set', 'é中😀', 'ü✓😀'); expect('unicode keys and values round trip', s('get', 'é中😀') === 'ü✓😀');\n"
+      "  s('set', 'k1', 'v2'); expect('overwriting replaces', s('get', 'k1') === 'v2');\n"
+      "  expect('a failing write returns its reason', s('set', 'fail-me', 'x') === 'disk full');\n"
+      "  s('set', 'big', 'x'.repeat(1048576)); expect('a one-megabyte value round trips', s('get', 'big').length === 1048576);\n"
+      "  s('remove', 'k1'); expect('remove deletes', s('get', 'k1') === undefined);\n"
+      "  expect('removing a missing key is not an error', s('remove', 'never-existed') === undefined);\n"
+      "  const keys = JSON.parse(s('keys', '')).sort();\n"
+      "  expect('keys lists every stored key as JSON', keys.indexOf('big') >= 0 && keys.indexOf('é中😀') >= 0 && keys.indexOf('k1') < 0 && keys.indexOf('fail-me') < 0);\n"
+      "  expect('an unknown operation is reported', typeof s('bogus', 'k') === 'string');\n"
+      "  expect('a set without a value is refused', typeof s('set', 'onlykey') === 'string');\n"
+      "  expect('calls with no or wrong arguments return undefined', s() === undefined && s(1) === undefined && s({}, 2) === undefined && s(null) === undefined);\n"
+      "  let survived = true; try { s('set', 'lone', '\\ud800'); s('get', 'lone'); } catch (error) { survived = false; }\n"
+      "  expect('a lone surrogate does not crash the engine', survived);\n"
+      "  globalThis.__storageFailures = failures.join('; ');\n"
+      "})();\n");
+  {
+    std::string storageFailures = real->global().getProperty(*real, "__storageFailures").getString(*real).utf8(*real);
+    CHECK(storageFailures.empty(), "every native storage behavior holds");
+    if (!storageFailures.empty()) std::printf("     failed: %s\n", storageFailures.c_str());
+  }
+  memory.clear();
+
   // 6. Values handed back by the engine are released without crashing (strings, objects, symbols, bigints).
   for (int round = 0; round < 2000; ++round)
     korg::evaluate(runtime, "[{a:1}, 'text' + 1, Symbol('s'), 10n, function(){}, new Error('x')]");
@@ -127,12 +189,7 @@ int main(int argc, char **argv) {
 
   // 9. The real Korg bundle, bootstrapped exactly as the iOS loader does, then an optional scenario script.
   if (argc >= 3) {
-    std::string prefix =
-        "void function(){\nif(globalThis.__KORG_NATIVE__)return;\nvar report=globalThis.__korgNativeReport;\n"
-        "try{delete globalThis.__korgNativeReport}catch(_){}\n"
-        "Object.defineProperty(globalThis,'__KORG_NATIVE__',{value:Object.freeze({name:'KorgOriginalLoader',"
-        "version:'0.2.0-native-original',abi:'jsi-0.86-apple-arm64-v2',storage:'host',report:typeof report==='function'?report:undefined,"
-        "log:function(){if(globalThis.console)console.log.apply(console,arguments)}}),configurable:false,writable:false});\n";
+    std::string prefix = korg::bootstrapPrefix();
     std::string source = prefix + slurp(argv[1]) + "\n}();\n";
     bool threw = false;
     try { korg::evaluate(runtime, source); }
@@ -160,7 +217,20 @@ int main(int argc, char **argv) {
         if (message.find("handled promise probe") != std::string::npos && message.find("unhandled promise probe") == std::string::npos) falseAlarm = true;
       CHECK(!falseAlarm, "a rejection that was handled a moment later was not reported");
     }
-    CHECK(any("\"phase\":\"registered\"") || any("rootWrapped\":true"), "a status snapshot saying the UI wrapped the root reached the native side");
+    CHECK(any("phase=rendered; rendered, mounted"), "the final status line says the overlay rendered and mounted");
+    CHECK(any("AppRegistry found (RN$AppRegistry)") || any("AppRegistry found (module)"), "a status line says where the AppRegistry was found");
+    CHECK(any("Storage: native files"), "a status line says storage is the loader's native files");
+    {
+      int statuses = 0;
+      for (const auto &message : messages) if (message.rfind("status\n", 0) == 0) ++statuses;
+      CHECK(statuses >= 4 && statuses < 120, "status messages track changes: enough to follow the boot, not one per module");
+      std::printf("info %d status messages were sent for a boot of thousands of modules\n", statuses);
+    }
+    {
+      bool saved = false;
+      for (const auto &entry : memory) if (entry.first.find("korg:korg.runtime.appearance:selected") == 0 && entry.second == "plum") saved = true;
+      CHECK(saved, "the chosen palette is in the native storage (what the device would have written to disk)");
+    }
     for (const auto &message : messages) {
       if (message.rfind("test\n", 0) == 0) {
         bool good = message.compare(5, 4, "PASS") == 0;

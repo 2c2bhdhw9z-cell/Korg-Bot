@@ -26,7 +26,7 @@ Korg does not execute every host module to discover it. Access may vary by React
 
 `await storage.createStorage(name, { defaults })` returns a hydrated, deeply observed settings object. Nested changes and deletions save snapshots. Await `settings.flush()` to surface a failed save.
 
-`storage.AsyncStorage` implements `getItem`, `setItem`, `removeItem`, `multiGet`, `multiSet`, `multiRemove`, `getAllKeys`, and `clear` in that plugin's own key namespace. Unavailable host storage is an explicit error; no fake persistent-memory fallback is used. The adapter also supports a plugin-supplied object backend with asynchronous `get`/`set` or `read`/`write`; each plugin instance remains separately scoped.
+`storage.AsyncStorage` implements `getItem`, `setItem`, `removeItem`, `multiGet`, `multiSet`, `multiRemove`, `getAllKeys`, and `clear` in that plugin's own key namespace. Persistence is the native loader's own file storage (Application Support/Korg/storage), not anything inside Discord, so it is available from the first moment and survives Discord clearing its own data. If it is not available an error is reported; no fake persistent-memory fallback is used. The adapter also supports a plugin-supplied object backend with asynchronous `get`/`set` or `read`/`write`; each plugin instance remains separately scoped.
 
 ## Compatibility objects
 

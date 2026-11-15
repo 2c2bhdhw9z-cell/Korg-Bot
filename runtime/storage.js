@@ -10,14 +10,50 @@
     function isBackend(item) {
         return Boolean(item) && ["getItem", "setItem", "removeItem"].every(key => typeof item[key] === "function");
     }
+
+    // The native loader's own key/value store (files in Application Support/Korg/storage). Discord has no AsyncStorage,
+    // and the objects in its modules that happen to have getItem/setItem (a Zustand persist adapter, for one) do not
+    // behave like it, so the loader provides storage and nothing here depends on finding Discord's.
+    let nativeStore;
+    function nativeBackend() {
+        if (nativeStore) return nativeStore;
+        const bridge = globalThis.__KORG_NATIVE__;
+        const call = bridge && bridge.storage;
+        if (typeof call !== "function") return null;
+        const fail = (what, reason) => { throw new Error(`Korg native storage ${what} failed: ${reason}`); };
+        nativeStore = Object.freeze({
+            async getItem(key) {
+                const value = call("get", String(key));
+                if (value === undefined || value === null) return null;
+                if (typeof value !== "string") fail("read", "unexpected result type");
+                return value;
+            },
+            async setItem(key, value) { const result = call("set", String(key), String(value)); if (typeof result === "string" && result) fail("write", result); },
+            async removeItem(key) { const result = call("remove", String(key), ""); if (typeof result === "string" && result) fail("delete", result); },
+            async getAllKeys() {
+                const text = call("keys", "");
+                const keys = typeof text === "string" ? JSON.parse(text) : [];
+                return Array.isArray(keys) ? keys.filter(name => typeof name === "string") : [];
+            },
+        });
+        return nativeStore;
+    }
+
+    // Looking through every host module for something shaped like storage is a last resort, and a failed search must
+    // not be repeated on every call: only look again once the host has loaded a good many more modules.
+    let scannedAt = -1;
     function discoverBackend() {
         if (injectedBackend) return injectedBackend;
+        const native = nativeBackend();
+        if (native) return native;
         if (globalThis.__KORG_TEST_DISABLE_DISCOVERY__ || !K.metro) return null;
         if (discoveredBackend) return discoveredBackend;
         if (discovering) return null;
+        const size = typeof K.metro.status === "function" ? K.metro.status().moduleCount : 0;
+        if (scannedAt >= 0 && size < scannedAt + 100) return null;
         discovering = true;
         try {
-            // Only the first sighting of the host's AsyncStorage needs the full scan; keep the result.
+            scannedAt = size;
             for (const exports of K.metro.getAll()) {
                 for (const name of [null, "default"]) {
                     let item;
@@ -63,7 +99,7 @@
         };
         // Multi operations are ordered batches, not transactions: a backend may fail partway.
         return Object.freeze({
-            getItem(name) { return read(store => store.getItem(key(name))); },
+            getItem(name) { return read(async store => { const raw = await store.getItem(key(name)); if (raw != null && typeof raw !== "string") throw new TypeError("Storage backend returned a non-string value"); return raw; }); },
             setItem(name, value) { const text = String(value); return enqueue(id, () => backend().setItem(key(name), text)); },
             removeItem(name) { return enqueue(id, () => backend().removeItem(key(name))); },
             multiGet(names) { const keys = Array.from(names, String); return read(store => Promise.all(keys.map(async name => [name, await store.getItem(key(name))]))); },
@@ -215,7 +251,14 @@
             if (backend !== null && (!backend || typeof backend.getItem !== "function" || typeof backend.setItem !== "function" || typeof backend.removeItem !== "function")) throw new TypeError("Storage backend must implement getItem, setItem, and removeItem");
             injectedBackend = backend;
             discoveredBackend = undefined;
+            scannedAt = -1;
         },
         get status() { return discoverBackend() ? "persistent" : "unavailable"; },
+        // Where persistence comes from: "native files", "supplied backend", "discovered host module" or "unavailable".
+        get source() {
+            // Reads what is already known and never searches, so reporting status cannot trigger a module scan.
+            const known = injectedBackend || nativeBackend() || discoveredBackend;
+            return !known ? "unavailable" : known === injectedBackend ? "supplied backend" : known === nativeStore ? "native files" : "discovered host module";
+        },
     };
 })(globalThis.__KORG_INTERNAL__);
