@@ -161,7 +161,7 @@
             const plugin = evaluate(item.source, { vendetta, bunny });
             if (typeof plugin.onLoad === "function") await plugin.onLoad();
             active.set(item.id, { plugin, scope });
-        } catch (error) { cleanup(scope); throw error; }
+        } catch (error) { cleanup(scope); if (typeof K.reportError === "function") K.reportError(`Plugin ${item.name} failed to start`, error); throw error; }
     }
     async function stop(item) {
         const record = active.get(item.id);

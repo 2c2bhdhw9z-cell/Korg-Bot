@@ -9,6 +9,8 @@
     const wrappers = new WeakMap();
     const factories = new WeakMap();
     const hooks = new Map();
+    // Which Metro functions have been called at least once; the first call of each is reported to the native loader.
+    const seen = new Set();
     let lastError;
     let scanning = false;
     const looksLikeExports = value => value !== null && (typeof value === "object" || typeof value === "function");
@@ -73,13 +75,15 @@
         const wrapped = function (...args) {
             hookGlobal("__d");
             hookGlobal("__r");
+            const first = !seen.has(name);
+            seen.add(name);
             if (name === "__d" && typeof args[0] === "function") args[0] = wrapFactory(args[0]);
             const result = value.apply(this, args);
             if (name === "__r") {
                 record(result);
                 notify(result);
             }
-            if (K.reportStatus) K.reportStatus();
+            if (K.reportStatus) K.reportStatus(first);
             return result;
         };
         byName.set(name, wrapped);
@@ -189,17 +193,19 @@
         });
     }
     const common = {};
-    for (const name of ["React", "ReactNative", "FluxDispatcher"]) {
+    // Hermes shares one binding across loop iterations, so each getter is made by a function call.
+    function defineCommon(name) {
+        const candidates = name === "React" ? ["createElement", "useState"] : name === "ReactNative" ? ["View", "Text"] : ["dispatch", "subscribe"];
         Object.defineProperty(common, name, {
             enumerable: true,
             get() {
-                const candidates = name === "React" ? ["createElement", "useState"] : name === "ReactNative" ? ["View", "Text"] : ["dispatch", "subscribe"];
                 const found = findByProps(...candidates);
                 if (!found) throw new Error(`Korg Metro module unavailable: ${name}`);
                 return found;
             },
         });
     }
+    ["React", "ReactNative", "FluxDispatcher"].forEach(name => defineCommon(name));
     function status() {
         const active = {};
         for (const name of ["__d", "__r"]) {
@@ -208,12 +214,13 @@
         }
         return { moduleCount: records.size, hooks: active, error: lastError ? String(lastError.message || lastError) : null };
     }
-    K.reportStatus = function () {
-        const snapshot = { metro: status(), ui: K.ui && K.ui.status ? K.ui.status() : { phase: "waiting" } };
+    K.reportStatus = function (force) {
+        const snapshot = { metro: status(), ui: K.ui && K.ui.status ? K.ui.status() : { phase: "waiting" }, errors: K.errors ? K.errors.length : 0 };
         globalThis.__KORG_DIAGNOSTICS__ = snapshot;
+        if (K.native && typeof K.native.status === "function") K.native.status(snapshot, force === true);
         return snapshot;
     };
     K.metro = { status, install, refresh: getAll, getAll, find, findByProps, findByName, findByStoreName, common, subscribe, get lastError() { return lastError; } };
     install();
-    K.reportStatus();
+    K.reportStatus(true);
 })(globalThis.__KORG_INTERNAL__);

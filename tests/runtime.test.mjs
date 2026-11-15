@@ -623,3 +623,64 @@ test("a console that throws cannot break logging", async () => {
     vm.runInContext(await readFile(path.join(repoRoot, "runtime", "core.js"), "utf8"), context);
     assert.doesNotThrow(() => context.__KORG_INTERNAL__.log.error("still fine"));
 });
+
+test("errors are recorded once, capped, and sent to the native reporter", async () => {
+    const sent = [];
+    const context = vm.createContext({ console: { error() {}, warn() {}, log() {} }, __KORG_NATIVE__: { report: text => sent.push(text) } });
+    vm.runInContext(await readFile(path.join(repoRoot, "runtime", "core.js"), "utf8"), context);
+    const K = context.__KORG_INTERNAL__;
+    assert.equal(sent[0], "boot\nKorg 0.2.0: core loaded");
+    K.reportError("loader", { name: "TypeError", message: "bad thing" });
+    K.reportError("loader", { name: "TypeError", message: "bad thing" });
+    assert.equal(K.errors.length, 1);
+    assert.equal(K.errors[0].count, 2);
+    assert.deepEqual(sent.slice(1), ["error\nloader: TypeError: bad thing"]);
+    // Logger: warnings and errors are recorded with their scope, debug and info are not.
+    const log = K.makeLogger("plugin");
+    log.info("quiet"); log.debug("quiet");
+    log.warn("careful", { message: "inner warning" });
+    log.error("failed", { name: "RangeError", message: "inner error" });
+    assert.deepEqual(Array.from(K.errors.slice(1), entry => entry.text), ["plugin warn: careful Error: inner warning", "plugin error: failed RangeError: inner error"]);
+    // Twenty are kept, the oldest first to go; nothing here can throw.
+    for (let index = 0; index < 30; index++) K.reportError("flood", `problem ${index}`);
+    assert.equal(K.errors.length, 20);
+    assert.equal(K.errors.at(-1).text, "flood: problem 29");
+    assert.doesNotThrow(() => K.reportError("hostile", { get message() { throw new Error("getter"); }, stack: "stack" }));
+    // The native reporter has a budget so a runaway error loop cannot flood the host.
+    for (let index = 0; index < 500; index++) K.reportError("loop", `distinct ${index}`);
+    assert.ok(sent.length <= 200, `sent ${sent.length}`);
+});
+
+test("a native reporter that throws cannot break the runtime", async () => {
+    const context = vm.createContext({ console: { error() {}, warn() {}, log() {} }, __KORG_NATIVE__: { report() { throw new Error("native side is gone"); } } });
+    vm.runInContext(await readFile(path.join(repoRoot, "runtime", "core.js"), "utf8"), context);
+    const K = context.__KORG_INTERNAL__;
+    assert.doesNotThrow(() => K.reportError("source", new Error("still recorded")));
+    assert.equal(K.errors.length, 1);
+    assert.doesNotThrow(() => K.native.status({ ui: { phase: "waiting" } }, true));
+});
+
+test("ErrorUtils is wrapped whether it already exists or appears later, and the host handler still runs", async () => {
+    for (const early of [true, false]) {
+        const context = vm.createContext({ console: { error() {}, warn() {}, log() {} } });
+        vm.runInContext(await readFile(path.join(repoRoot, "runtime", "core.js"), "utf8"), context);
+        const K = context.__KORG_INTERNAL__;
+        const define = `globalThis.ErrorUtils = { _h: (error) => { throw error; }, setGlobalHandler(handler) { this._h = handler; }, getGlobalHandler() { return this._h; } }; globalThis.calls = [];`;
+        if (early) vm.runInContext(define, context);
+        K.installErrorHooks();
+        K.installErrorHooks();   // installing twice must not double-wrap
+        if (!early) vm.runInContext(define, context);
+        vm.runInContext("ErrorUtils.setGlobalHandler(function (error, fatal) { calls.push([error.message, fatal]); });", context);
+        vm.runInContext("ErrorUtils.getGlobalHandler()({ name: 'Error', message: 'boom' }, true);", context);
+        assert.deepEqual(JSON.parse(JSON.stringify(context.calls)), [["boom", true]], `original handler still called (early=${early})`);
+        assert.equal(K.errors.length, 1, `recorded once (early=${early})`);
+        assert.match(K.errors[0].text, /^Uncaught fatal error: Error: boom/);
+        // The handler that was installed before Korg arrived is wrapped as well (default handler rethrows).
+        const fresh = vm.createContext({ console: { error() {}, warn() {}, log() {} } });
+        vm.runInContext(await readFile(path.join(repoRoot, "runtime", "core.js"), "utf8"), fresh);
+        vm.runInContext(define, fresh);
+        fresh.__KORG_INTERNAL__.installErrorHooks();
+        assert.throws(() => vm.runInContext("ErrorUtils.getGlobalHandler()(new Error('default handler'), false)", fresh), /default handler/);
+        assert.match(fresh.__KORG_INTERNAL__.errors[0].text, /^Uncaught error: Error: default handler/);
+    }
+});

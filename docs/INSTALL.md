@@ -75,7 +75,15 @@ The loader reads only the bundled UTF-8 JavaScript resource (`KorgResources.bund
 
 ## Controls and recovery
 
-If host attachment succeeds, the runtime wraps the React Native root registration and provides a floating **K** control opening Korg's own settings. Separately, the native loader shows a small floating **Korg** button that opens a diagnostics alert (loader, hook, resource and evaluation status, with a Copy button); it works even when the JavaScript side fails to attach. The six palettes—Graphite, Ember, Glacier, Orchard, Plum, Paper—color those controls only. No full Discord theme engine, font importer, old plugin packs, native safe-mode menu, or global restore/undo behavior is promised.
+If host attachment succeeds, the runtime wraps the React Native root registration and provides a floating **K** control opening Korg's own settings. Separately, the native loader shows a small floating **Korg** button that opens a diagnostics alert with a Copy button; it works even when the JavaScript side fails to attach. The alert lists:
+
+- `layout`: whether Discord's JavaScript engine interface is the one this loader was built for (it refuses to run otherwise, leaving stock Discord untouched);
+- `reporter`, `resource` and `evaluation`: whether the loader installed its reporting function, found `korg.js`, and ran it without a JavaScript error;
+- `runtime` and `runtime status`: what Korg's own JavaScript last reported, such as how many Metro modules it has seen and why the K control is not attached yet;
+- **JavaScript errors**: every error Korg's JavaScript caught, including uncaught errors, plugin load failures and errors thrown while the bootstrap script ran, with their stack traces;
+- **Previous launch**: the last messages and errors from the launch before this one, which is where a crash leaves its last words.
+
+If the app ends while Korg is calling into the engine, the next launch skips Korg once (`safe mode` in the alert) so Discord still opens, and the launch after that tries again. The six palettes—Graphite, Ember, Glacier, Orchard, Plum, Paper—color those controls only. No full Discord theme engine, font importer, old plugin packs, native safe-mode menu (beyond the one-launch skip described above), or global restore/undo behavior is promised.
 
 The actual runtime starts with no plugins. Its URL controls accept a direct HTTPS bundle or JSON manifest, store downloaded source disabled initially, and expose enable, disable, update, remove, and supported exported settings. Enabled plugins run with host JavaScript privileges through a partial Vendetta/Bunny adapter; unsupported APIs or host changes can break them. The browser URL demo does none of this execution.
 

@@ -68,3 +68,36 @@ jobs:
           path: artifacts/native/
           if-no-files-found: error
           retention-days: 14
+
+  # Builds the exact Hermes engine Discord 353 ships and runs Korg's loader core and runtime inside it, on Apple arm64
+  # with libc++ (the device's ABI). This is what finds bugs like a wrong virtual-table slot or Hermes sharing one loop
+  # binding between iterations, neither of which the Node tests can see.
+  engine:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out Korg
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Check out Hermes 250829098.0.15, the engine in Discord 353
+        run: git clone --quiet --depth 1 --branch hermes-v250829098.0.15 https://github.com/facebook/hermes.git "$RUNNER_TEMP/hermes-src"
+
+      - name: Build the Hermes engine
+        run: |
+          cmake -S "$RUNNER_TEMP/hermes-src" -B "$RUNNER_TEMP/hermes-build" -DCMAKE_BUILD_TYPE=Release \
+            -DHERMES_ENABLE_TEST_SUITE=OFF -DHERMES_BUILD_APPLE_FRAMEWORK=OFF -DHERMES_ENABLE_DEBUGGER=OFF
+          cmake --build "$RUNNER_TEMP/hermes-build" --target hermesvm -j 4
+          ls -la "$RUNNER_TEMP/hermes-build/lib" | grep hermesvm
+
+      # Test-only tools: Hermes' compiler for the loop-capture check and Metro's own require polyfill. Neither ships in Korg.
+      - name: Install test tools
+        run: npm install --no-save --no-package-lock --ignore-scripts hermes-compiler@250829098.0.19 metro-runtime@0.88.0
+
+      - name: Run Korg in the real engine
+        run: |
+          npm run build
+          HERMES_SRC="$RUNNER_TEMP/hermes-src" HERMES_BUILD="$RUNNER_TEMP/hermes-build" \
+            METRO_REQUIRE="$PWD/node_modules/metro-runtime/src/polyfills/require.js" \
+            node --test tests/native-hermes.test.mjs tests/hermes-semantics.test.mjs tests/hermes.test.mjs

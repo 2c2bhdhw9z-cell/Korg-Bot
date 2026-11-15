@@ -1,43 +1,78 @@
-# Korg original native loader, ABI contract v1
+# Korg original native loader, ABI contract v2
 
-This implementation was independently authored for Korg. No Discord modification's source, headers, hook library, implementation, theme, or native dependency is incorporated. This is a source provenance statement, not a formal clean-room certification or a guarantee of rights in the host application. Public React Native declarations were inspected to establish the binary interface; no React Native file is distributed or compiled into this loader.
+This implementation was independently authored for Korg. No Discord modification's source, headers, hook library, implementation, theme, or native dependency is incorporated. This is a source provenance statement, not a formal clean-room certification or a guarantee of rights in the host application. Public React Native and Hermes declarations were inspected to establish the binary interface; no React Native or Hermes file is distributed or compiled into this loader.
 
 ## Version and verification boundary
 
-Target: supplied Discord iOS 353.0 build 122208, bridgeless React Native, Apple arm64, libc++, iOS 16 minimum. Static Objective-C metadata inspection confirmed `RCTHost` implements `instance:didInitializeRuntime:` with encoding `v32@0:8@16^{Runtime=^^?}24` at image address `0x100610b54`. The interface baseline is **React Native v0.80.0**. The exact React Native/Hermes build shipped in Discord 353 has not been established from host headers or measured on a physical device. iOS 27 and actual Discord execution are unverified. This loader is an implementation targeting that interface, not a claim of demonstrated device compatibility.
+Target: supplied Discord iOS 353.0 build 122208, bridgeless React Native, Apple arm64, libc++, iOS 16 minimum. Static Objective-C metadata inspection confirmed `RCTHost` implements `instance:didInitializeRuntime:` with encoding `v32@0:8@16^{Runtime=^^?}24` at image address `0x100610b54`.
 
-Official declarations inspected:
+**The engine was measured from the supplied IPA, not assumed:**
 
-- [JSI public declaration](https://github.com/facebook/react-native/blob/v0.80.0/packages/react-native/ReactCommon/jsi/jsi/jsi.h): `Buffer`, `Runtime`, `Value`, and the pointer invalidation contract.
-- [RCTHost callback](https://github.com/facebook/react-native/blob/v0.80.0/packages/react-native/ReactCommon/react/runtime/platform/ios/ReactCommon/RCTHost.mm): `instance:didInitializeRuntime:`.
-- [RCTInstance lifecycle](https://github.com/facebook/react-native/blob/v0.80.0/packages/react-native/ReactCommon/react/runtime/platform/ios/ReactCommon/RCTInstance.mm): initialization callback runs on the runtime thread before subsequent application work.
+- `Frameworks/hermesvm.framework` is **Hermes 1.0.0, build `250829098.0.15`**, a full build with the compiler included (it contains the parser and bytecode-lowering code, so it compiles source text at run time).
+- `main.jsbundle` is Hermes bytecode **version 98** (magic `0x1F1903C103BC1FC6`, version field `0x62`).
+- The interface is React Native **0.86**'s: `facebook::jsi::Runtime` derives from `IRuntime`, which derives from `ICast`. The framework exports `Runtime`'s virtual table and the base-class implementations of many virtual functions. All 39 entries that resolve to a named exported function, spread over slots 0 to 108, appear in the order of `jsi.h` from the Hermes tag `hermes-v250829098.0.15` (md5 `5c81e771…`, byte-identical to React Native 0.86's header), and the two destructors sit at 109 and 110.
 
-These references describe ABI facts, not code incorporated into Korg.
+This is a static and emulated verification. **The loader has not been observed running on a physical iPhone.** iOS 27 and actual Discord execution remain unverified.
+
+### History: why v1 never ran the script
+
+ABI v1 assumed the React Native 0.80 layout, where slots 0 and 1 are the destructors and slot 2 is `evaluateJavaScript`. In the 0.86 layout slot 0 is `ICast::castInterface`, `evaluateJavaScript` is **slot 1**, and slot 2 is `prepareJavaScript`. v1 therefore called `prepareJavaScript`, which compiles the script and discards the result. Nothing threw, the diagnostics said "evaluation returned", and Korg's JavaScript never executed. `tests/native/hermes-harness.cpp` keeps a negative control that calls slot 2 and shows the script does not run.
 
 ## Native call contract
 
-The Objective-C IMP takes four machine arguments: receiver, selector, instance object, runtime pointer. The final pointer is the machine representation of a C++ runtime reference. A three-argument hook would shift the instance into the runtime position and is invalid. The hook checks argument count and basic Objective-C type encodings; these checks cannot validate a C++ vtable layout.
+The Objective-C IMP takes four machine arguments: receiver, selector, instance object, runtime pointer. The final pointer is the machine representation of a C++ runtime reference. A three-argument hook would shift the instance into the runtime position and is invalid.
 
-With Apple's arm64 Itanium-style C++ ABI, the runtime vptr addresses the first function entry. Slots 0 and 1 are the complete and deleting virtual destructors. **Slot 2 is `evaluateJavaScript`**, followed by `prepareJavaScript` and `evaluatePreparedJavaScript` in RN 0.80. The caller passes the runtime pointer, a reference to a `std::shared_ptr<const Buffer>`, and a reference to a libc++ `std::string`. Korg uses an independently named buffer interface with that binary layout: virtual destructor pair, const byte count method, then const byte pointer method. Its immutable string lives for as long as the shared owner, including any engine-retained copies. No host C++ symbols are linked or resolved by name.
+The runtime vptr addresses the first function entry (Itanium C++ ABI). Slots used, in the order `jsi.h` declares them (`ICast` first, then `IRuntime`'s virtual functions, destructors last):
 
-The returned JSI value has a 32-bit kind at offset 0 and eight-byte payload at offset 8, total 16 bytes/alignment 8. Kinds are undefined 0, null 1, boolean 2, number 3, and owned symbol/bigint/string/object 4 through 7. **Size alone does not establish return convention**: the nontrivial destructor makes Apple arm64 use caller-allocated result storage addressed in **x8**, rather than a trivial aggregate returned in x0/x1. Korg's result carrier has its own nontrivial destructor to preserve that convention. Pointer payloads, if ever returned, are released through virtual invalidation entry slot 0. In the public RN 0.80 declaration, `invalidate()` is declared before the virtual destructor, so it occupies the first slot. Korg does not call a host Value destructor or depend on its exported symbol.
+| Slot | Function |
+| ---: | --- |
+| 0 | `castInterface(const UUID &)` |
+| **1** | **`evaluateJavaScript(const std::shared_ptr<const Buffer> &, const std::string &)`** |
+| 2, 3 | `prepareJavaScript`, `evaluatePreparedJavaScript` (never called) |
+| 6 | `global()` |
+| 19 | `createPropNameIDFromAscii(const char *, size_t)` |
+| 36 | `utf8(const String &)` |
+| 54 | `setPropertyValue(const Object &, const PropNameID &, const Value &)` |
+| 79 | `createFunctionFromHostFunction(const PropNameID &, unsigned, HostFunctionType)` |
+| 109, 110 | complete and deleting destructors |
 
-The script is wrapped in `void function(){ ... }();`, so successful evaluation yields undefined and cannot retain an object-valued bootstrap result. Unexpected owned return values are still released. C++ and Objective-C bootstrap exceptions are logged, then the original callback proceeds. Invalid native pointers, mismatched vtables, arm64e pointer authentication, or an engine with a different ABI cannot be made safe by catching exceptions. This is an arm64 build, not an arm64e build.
+Korg uses independently named stand-ins with the same binary shapes: a buffer interface (virtual destructor pair, `size`, `data`), a 16-byte `Value` (32-bit kind, padding, eight-byte payload; undefined 0, null 1, boolean 2, number 3, owned symbol/bigint/string/object 4 to 7), and an 8-byte `Handle` for `Object`, `Function`, `String` and `PropNameID`. **Size alone does not establish the return convention**: each has a nontrivial destructor, so Apple arm64 returns it through caller-allocated storage addressed in **x8**, as the host's classes do. Owned pointers are released through virtual invalidation entry slot 0 (`PointerValue::invalidate()`).
+
+### The layout is checked before any call
+
+`korg::checkLayout` compares the host's *exported* `facebook::jsi::Runtime` virtual table with 20 anchor functions: base-class implementations at slots 0, 9, 12, 13, 21, 35, 37, 42, 47, 50, 53, 56, 59, 75, 78, 83, 92, 98, 105 and 108, read from `hermesvm.framework`. An inserted or removed virtual function anywhere shifts every anchor after it. It also requires slots 1 to 8 to be one shared pure-virtual stub and the destructors to be either at 109 and 110 or both null (GCC leaves an abstract class's destructor entries null; Apple's compiler fills them in). If anything disagrees, the loader does not touch the runtime. It records `layout: Not recognized: <reason>` and skips Korg, so a Discord update that changes the interface degrades to stock Discord instead of crashing.
+
+### Errors and the safe-mode breadcrumb
+
+A JavaScript exception thrown out of `evaluateJavaScript` is a `facebook::jsi::JSError`, a `std::exception` whose `what()` is the message plus the JavaScript stack. The loader catches it and records the full text. Before each call into the runtime it writes `KorgOriginalInFlight` to `NSUserDefaults` and clears it afterwards. If the app dies in between, the next launch skips Korg once, says why under **Previous launch**, and clears the flag so the launch after that tries again.
+
+## JavaScript-to-native reporting
+
+Before the bootstrap runs, the loader installs one native function, `globalThis.__korgNativeReport(string)`, created with `createFunctionFromHostFunction`. The bootstrap moves it into the frozen `__KORG_NATIVE__.report` and deletes the global. It runs on the JavaScript thread, accepts only string arguments, never throws into the engine, and hands text to the diagnostics store. Korg's runtime uses it for:
+
+- `boot` lines (core loaded, runtime started),
+- `error` reports: every `warn` or `error` the runtime logs, plugin load failures, and uncaught errors seen through a wrapper around `ErrorUtils.setGlobalHandler` (the host's own handler still runs),
+- `status` snapshots: Metro hook state, module count, UI phase and the reason the UI is not attached yet.
+
+The runtime caps this at 200 messages per launch. Errors are written to disk immediately because the host may crash right after reporting one.
 
 ## Startup and JavaScript API
 
 The constructor looks up `RCTHost` and installs an IMP using Apple's Objective-C runtime. An inherited method is overridden on the host class. Later image loads schedule another installation attempt; bounded main-queue retries also handle classes registered after the constructor. A late-loaded loader cannot retroactively intercept an already completed initialization callback. Inject it as an executable load dependency before application startup.
 
-Korg evaluates **before calling the original delegate**, on the callback's runtime thread. This gives the packaged bootstrap a chance to observe Metro's `__d`/`__r` assignments before the host starts its main application. Metro may not exist at that point. The JavaScript bootstrap must support early installation and delay module/UI operations until registration. The loader adds one native UI element, a small floating **Korg** button that opens a diagnostics alert (loader, hook, resource and evaluation status, with a Copy button), and it keeps that diagnostics snapshot in `NSUserDefaults` under `KorgOriginalDiagnostics`. No asynchronous JSI access is introduced.
+Korg evaluates **before calling the original delegate**, on the callback's runtime thread. This gives the packaged bootstrap a chance to observe Metro's `__d`/`__r` assignments before the host starts its main application. Metro does not exist at that point, so the JavaScript bootstrap installs early and delays module and UI operations until registration. The loader adds one native UI element, a small floating **Korg** button that opens a diagnostics alert with a Copy button. The alert shows the loader, hook, layout, reporter, resource and evaluation status, the runtime's latest status, the JavaScript errors, and a summary of the previous launch. The snapshot is kept in `NSUserDefaults` under `KorgOriginalDiagnostics` and `KorgOriginalJSErrors`. Beyond the reporter above, no asynchronous JSI access is introduced.
 
-The script is passed to the engine as plain source text. Hermes 0.12 (React Native 0.80, bytecode 96) rejects `async` functions, which the runtime uses; Hermes 1.0 (bytecode 98) accepts them. Which engine Discord 353 embeds has not been verified on a device. `tests/hermes.test.mjs` compiles the bundle whenever a Hermes compiler is available.
+The script is passed to the engine as plain source text, which Discord's full Hermes 1.0 build compiles. `async` functions, optional chaining and spread all work (verified in a real Hermes 1.0 engine, and `tests/hermes.test.mjs` compiles the bundle whenever a Hermes compiler is available).
+
+**Hermes does not give each loop iteration its own `let`/`const` binding.** A closure created inside a loop sees the last iteration's value. React Native apps avoid this because their build rewrites such code; Korg's source reaches the engine unchanged, so `runtime/*.js` must create closures in a helper function instead. `tests/hermes-semantics.test.mjs` fails the build when it finds the pattern.
 
 The only native-created global is immutable `globalThis.__KORG_NATIVE__`:
 
 - `name`: `KorgOriginalLoader`
 - `version`: `0.2.0-native-original`
-- `abi`: `rn-0.80-apple-arm64-v1`
+- `abi`: `jsi-0.86-apple-arm64-v2`
 - `storage`: `host` (a capability choice, not an AsyncStorage implementation)
+- `report(string)`: the native reporting function described above (absent if it could not be installed)
 - `log(...args)`: forwards to an available host JavaScript console
 
 The JS runtime supplies persistence using host AsyncStorage when available, plugin handling, Metro interception, and a React Native AppRegistry root wrapper/floating launch entry. There is no native storage module, networking, bundle downloader, settings controller, or private decryption code. The only script input is UTF-8 `KorgResources.bundle/korg.js` under the application's bundle directory (up to 32 MiB). The global also guards repeat bootstrap evaluation within one runtime.
@@ -50,11 +85,17 @@ The JS runtime supplies persistence using host AsyncStorage when available, plug
 
 Output: `artifacts/native/KorgLoader.dylib`, `KorgResources.bundle/` (JS and build manifest), `manifest.json`, `SOURCE-NOTICE.md`, and `korg-source.tar.gz` (which contains the sources and licenses, including this document). The collector does not embed third-party plugin code.
 
-Tests exercise the independently authored call carrier against a synthetic runtime. The Mac build compiles the real arm64 Mach-O and checks system dependencies and artifact checksums. These checks are not proof of the host ABI. Static callback metadata is verified in the supplied Discord 353 binary; physical-device startup, reload, missing-resource, syntax-error and persistence checks remain necessary.
+Evidence, from weakest to strongest:
+
+- `tests/native.test.mjs` compiles the loader's engine-facing core against a synthetic runtime with the 0.86 table shape and exercises the layout check, including damaged tables.
+- `tests/native-hermes.test.mjs` builds `tests/native/hermes-harness.cpp` and drives a **real Hermes 1.0.0 engine** through the loader core, then boots the real `dist/korg.js` and runs `tests/native/scenario.js`, a simulated Discord with Metro's real `require` polyfill, React Native style lazy exports, AppRegistry, AsyncStorage and ErrorUtils. It checks slot 1 executes, slot 2 does not, exceptions arrive with their stack, the native function receives text, the K button renders and opens, a palette persists, a plugin patches and unpatches, and errors reach the native side. It needs the engine's source and build (`HERMES_SRC`, `HERMES_BUILD`); the `engine` CI job builds Hermes 250829098.0.15 on macOS arm64 and runs it, matching the device's architecture and standard library.
+- The `loader` CI job compiles the real arm64 Mach-O and checks system dependencies and artifact checksums.
+
+None of this replaces physical-device startup, reload, missing-resource, syntax-error and persistence checks.
 
 ## Permission for these original files
 
-The following permission applies to `native/KorgLoader.mm`, this document, `scripts/build-native.sh`, `scripts/collect-native.py`, `.github/workflows/build-native.yml`, and `tests/native.test.mjs`. It does not replace any license on other files or remove obligations for previously distributed material.
+The following permission applies to `native/KorgLoader.mm`, this document, `scripts/build-native.sh`, `scripts/collect-native.py`, `scripts/hermes-scope-check.mjs`, `.github/workflows/build-native.yml`, `tests/native.test.mjs`, `tests/native-hermes.test.mjs`, `tests/hermes-semantics.test.mjs`, and the files in `tests/native/`. The test harness includes Hermes' public headers when compiled but contains none of them. It does not replace any license on other files or remove obligations for previously distributed material.
 
 MIT No Attribution (MIT-0)
 

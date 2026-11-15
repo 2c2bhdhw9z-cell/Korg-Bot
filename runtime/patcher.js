@@ -23,27 +23,29 @@
             try { Object.defineProperty(to, key, Object.getOwnPropertyDescriptor(from, key)); } catch { /* A fixed property stays as the wrapper defined it. */ }
         }
     }
+    // One layer of the patch chain. This must be a function, not loop-body code: Hermes shares one binding
+    // across loop iterations, so closures made directly in the loop would all see the last patch.
+    function layer(patch, next) {
+        return function (...incoming) {
+            const receiver = this;
+            // A reference captured before unpatch() must stop running the callback.
+            if (!patch.active) return next.apply(receiver, incoming);
+            let args = incoming;
+            if (patch.type === "before") {
+                const replacement = patch.callback(args, receiver);
+                if (Array.isArray(replacement)) args = replacement;
+                return next.apply(receiver, args);
+            }
+            if (patch.type === "instead") return patch.callback(args, (...replacementArgs) => next.apply(receiver, replacementArgs), receiver);
+            const result = next.apply(receiver, args);
+            const replacement = patch.callback(args, result, receiver);
+            return replacement === undefined ? result : replacement;
+        };
+    }
     function rebuild(record) {
         const active = record.patches.filter(item => item.active).sort((a, b) => a.order - b.order);
         let wrapped = record.original;
-        for (const patch of active) {
-            const next = wrapped;
-            wrapped = function (...incoming) {
-                const receiver = this;
-                // A reference captured before unpatch() must stop running the callback.
-                if (!patch.active) return next.apply(receiver, incoming);
-                let args = incoming;
-                if (patch.type === "before") {
-                    const replacement = patch.callback(args, receiver);
-                    if (Array.isArray(replacement)) args = replacement;
-                    return next.apply(receiver, args);
-                }
-                if (patch.type === "instead") return patch.callback(args, (...replacementArgs) => next.apply(receiver, replacementArgs), receiver);
-                const result = next.apply(receiver, args);
-                const replacement = patch.callback(args, result, receiver);
-                return replacement === undefined ? result : replacement;
-            };
-        }
+        for (const patch of active) wrapped = layer(patch, wrapped);
         if (!active.length) {
             if (record.descriptor) Object.defineProperty(record.object, record.key, record.descriptor);
             // The method was inherited: drop our own copy instead of shadowing the prototype forever.
@@ -87,7 +89,9 @@
             };
         }
         const scope = { owner: String(owner || "anonymous") };
-        for (const type of ["before", "after", "instead"]) scope[type] = (method, object, callback) => add(type, method, object, callback);
+        // A helper per type: see layer() for why the closure cannot be created inside the loop.
+        function patchMethod(type) { return (method, object, callback) => add(type, method, object, callback); }
+        for (const type of ["before", "after", "instead"]) scope[type] = patchMethod(type);
         scope.unpatchAll = () => {
             let failure;
             for (const patch of Array.from(owned)) {

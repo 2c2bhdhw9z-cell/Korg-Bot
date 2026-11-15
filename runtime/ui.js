@@ -19,7 +19,13 @@
     function status() { return { ...hostState }; }
     function report() {
         if (K.runtime && K.runtime.ui) Object.assign(K.runtime.ui, hostState);
-        if (K.reportStatus) K.reportStatus();
+        if (K.reportStatus) K.reportStatus(true);
+    }
+    // Explains why the UI is not attached yet; reported only when the explanation changes.
+    function note(reason) {
+        if (hostState.reason === reason) return;
+        hostState.reason = reason;
+        report();
     }
     const state = { visible: false, url: "", kind: "bundle", notice: "", plugins: [], theme: "graphite", busy: false, settingsId: null };
 
@@ -154,7 +160,10 @@
             if (resolvedReact) React = resolvedReact;
             if (resolvedNative) Native = resolvedNative;
             const registry = Native && Native.AppRegistry;
-            if (!registry || typeof registry.registerComponent !== "function" || !K.patcher) return false;
+            if (!registry || typeof registry.registerComponent !== "function" || !K.patcher) {
+                note(`Waiting for host modules: React ${React ? "found" : "missing"}, ReactNative ${Native ? "found" : "missing"}, AppRegistry ${registry ? "found" : "missing"}`);
+                return false;
+            }
             if (registry === attachedRegistry) return true;
             const scope = K.patcher.createScope("korg-runtime-ui");
             registeredScopes++;
@@ -179,7 +188,7 @@
             report();
             update({ plugins: K.plugins ? K.plugins.list() : [], theme: K.themes ? K.themes.current() : "graphite" });
             return true;
-        } catch (error) { K.log.warn("Korg UI host attachment failed", error); return false; }
+        } catch (error) { K.log.warn("Korg UI host attachment failed", error); note(`Host attachment failed: ${String(error && error.message || error)}`); return false; }
         finally { attaching = false; }
     }
     function retry() {

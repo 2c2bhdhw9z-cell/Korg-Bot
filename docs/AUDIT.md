@@ -20,11 +20,11 @@ Counts are files, not runtime dependencies. Every path in the enumerated snapsho
 | Documentation | 3 | API, installation, audit |
 | Native | 2 | Original loader and ABI contract |
 | Runtime | 9 | Fixed local bundle inputs |
-| Build/development scripts | 6 | Local build, verify, compile, collect, package, preview |
+| Build/development scripts | 7 | Local build, verify, compile, collect, package, preview, Hermes loop-capture check |
 | Browser preview | 4 | Original local settings design |
-| Tests | 6 | Runtime/plugin/native/preview/Hermes and packaging checks |
+| Tests | 10 | Runtime/plugin/native/preview/Hermes, real-engine harness and scenario, and packaging checks |
 | CI | 1 | macOS build workflow |
-| **Total** | **36** | **No listed file omitted** |
+| **Total** | **41** | **No listed file omitted** |
 
 ### Root metadata — 5
 
@@ -57,13 +57,14 @@ Counts are files, not runtime dependencies. Every path in the enumerated snapsho
 - `runtime/ui.js`: original host-native controls and root-registration wrapper, URL operations, plugin settings and palette selection.
 - `runtime/start.js`: synchronous early setup and explicit boot state; readiness flags alone do not prove the host UI works.
 
-### Scripts — 6
+### Scripts — 7
 
 - `scripts/build.mjs`: fixed nine-file local concatenation and syntax check; emits source hashes with `plugins: []`, `dependencies: []`. No upstream fetch or package installation.
 - `scripts/verify.mjs`: verifies exact local input set, source hashes, deterministic bundle bytes, empty plugin/dependency arrays and syntax. Hashes establish contents, not authorship or device compatibility.
 - `scripts/build-native.sh`: direct Xcode arm64 compilation with Apple frameworks/libc++; no RainTweak, Theos or external hook-runtime setup.
 - `scripts/collect-native.py`: system-dependency allowlist, component/source hash manifest and source archive collection.
 - `scripts/package-ipa.py`: original ZIP/Mach-O validation and unsigned Discord 353 packaging path. The native and runtime manifest versions/fields are now aligned. Synthetic tests passed; the exact compiled artifact and supplied IPA must also pass the final packaging checks.
+- `scripts/hermes-scope-check.mjs`: finds closures that capture `let`/`const` variables declared inside a loop, by analyzing the ESTree that `hermesc -dump-ast` prints. Hermes shares one binding across iterations, so such closures all see the last value.
 - `scripts/preview.mjs`: replaced with an independent local HTTP asset server using only Node built-ins. The previous implementation and its MPL header were removed rather than relicensed; history retains the old notice.
 
 ### Preview — 4
@@ -75,16 +76,18 @@ Counts are files, not runtime dependencies. Every path in the enumerated snapsho
 
 The preview is deliberately separate from the actual URL downloader/evaluator in `runtime/plugins.js`. A demo list entry means no manifest or source was retrieved. New preview assets are MIT-0 and use no external library, font, script or stylesheet.
 
-### Tests — 6
+### Tests — 10
 
 - `tests/runtime.test.mjs`: Metro capture, patch ownership, storage semantics, compatibility and synthetic host UI/plugin integration, plus regressions for stale patches, once-only module announcements, backend caching and early logging.
 - `tests/plugins.test.mjs`: URL/manifest handling (including React Native's `URL` polyfill and encoded path traversal), cache/lifecycle failures, partial dependency mappings, palettes and startup/UI fixtures.
-- `tests/native.test.mjs`: synthetic C++ ABI call and conditional collected-artifact hash checks. Missing native output can produce a skip; a skip is not native verification.
+- `tests/native.test.mjs`: synthetic C++ ABI call (slot 1, not slot 2), the layout check against intact and damaged tables, and conditional collected-artifact hash checks. Missing native output can produce a skip; a skip is not native verification.
+- `tests/native-hermes.test.mjs`, `tests/native/hermes-harness.cpp`, `tests/native/scenario.js`: build the loader core against a real Hermes 1.0.0 engine (the version in Discord 353), check every virtual-table slot and ownership rule, boot the real runtime and run a simulated Discord with Metro's real `require`. Skipped without `HERMES_SRC` and `HERMES_BUILD`; the `engine` CI job supplies them.
+- `tests/hermes-semantics.test.mjs`: fails when `runtime/*.js` creates a closure over a loop-scoped variable, and checks the checker itself against known-bad and known-good patterns.
 - `tests/preview.test.mjs`: the preview server survives a malformed request line and serves the expected status codes.
 - `tests/hermes.test.mjs`: compiles `dist/korg.js` with a Hermes compiler when one is available (`HERMESC` or the `hermes-compiler` npm package); skipped otherwise.
 - `tests/test_package_ipa.py`: synthetic Mach-O/ZIP fixtures, package preservation, legacy-resource removal, artifact hashes and rejection cases. Fixtures do not establish real supplied-IPA packaging success.
 
-### CI — 1
+### CI — 1 file, 2 jobs
 
 - `.github/workflows/build-native.yml`: macOS checkout, local build/test, native collection and artifact upload. Pinned runner actions are infrastructure, not incorporated runtime dependencies. A workflow file is not evidence that it has passed.
 
@@ -119,4 +122,21 @@ Every file was read again and the suites were run (Node, Python, and a macOS CI 
 - `tests/native.test.mjs`: a missing C++ compiler registered a separate skipped test instead of skipping.
 - `preview/style.css`: the `select` rule overrode the 16 px size that stops iOS Safari from zooming on focus; several labels were 7–10 px.
 
-Not established: whether the Hermes build inside Discord 353 accepts `async` functions (Hermes 0.12 rejects them, Hermes 1.0 accepts them), and everything that needs a physical device. Findings that could not be reproduced without a device (native button placement, burst of `install()` retries before the first successful hook, plugin settings screens that throw) were left unchanged.
+That pass could not tell which Hermes Discord 353 embeds; the next pass measured it. Findings that could not be reproduced without a device (native button placement, burst of `install()` retries before the first successful hook, plugin settings screens that throw) were left unchanged.
+
+## Review pass after the first device report
+
+A device run of the previous build showed the loader hooking React Native, loading the script and reporting that evaluation returned, but no K control appeared. The Discord IPA was then inspected directly and the real engine was built from source.
+
+**Measured, not assumed.** `hermesvm.framework` is Hermes 1.0.0 (build `250829098.0.15`); the app's bundle is bytecode version 98. The engine compiles `async` functions (its compiler is present, and the earlier "evaluation returned" step could only complete if compilation succeeded).
+
+**Root cause.** The loader called slot 2 of `jsi::Runtime`'s virtual table. In the React Native 0.86 interface slot 0 is `ICast::castInterface`, so slot 1 is `evaluateJavaScript` and slot 2 is `prepareJavaScript`, which compiles and discards. Korg's JavaScript never ran. All 39 named entries in the real binary's table, over slots 0 to 108, match the layout derived from the header, and the loader now refuses to run unless 20 anchor functions sit where expected.
+
+**Problems that fixing the slot would have exposed**, found by running the runtime in a real Hermes 1.0.0 engine:
+
+- Hermes shares one `let`/`const` binding across loop iterations. In `runtime/patcher.js` every `before`/`after` patch therefore ran as `instead`; the wrapper Korg installs on `AppRegistry.registerComponent` would have swallowed the app's own root registration and left Discord blank. Chained patches also composed wrongly. In `runtime/core.js` every logger level was the last one; in `runtime/metro.js` and `runtime/compat.js` lazy getters resolved the wrong module. All were restructured, and `tests/hermes-semantics.test.mjs` now guards the pattern.
+- `K.metro.getAll()` returned a function after the UI patched it, which stopped storage discovery and left themes and plugins without persistence.
+
+**Diagnostics added** (native `Korg` button): the layout check result, reporter state, the full text and stack of any JavaScript exception, and a stream of errors and status snapshots from Korg's own JavaScript through a native function the loader installs. Errors are persisted at once; a crash leaves a summary under **Previous launch**, and a launch that follows a crash inside the engine skips Korg once.
+
+Still not established: behavior on a physical iPhone, Discord's real module graph (the scenario uses a simulated one plus Metro's real `require`), and iOS 27.

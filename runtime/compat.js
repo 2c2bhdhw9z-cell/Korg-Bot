@@ -6,7 +6,8 @@
         try { return K.metro.common.ReactNative; } catch { return undefined; }
     }
     const uiComponents = {};
-    for (const name of nativeNames) {
+    // Hermes shares one binding across loop iterations, so each getter is made by a function call.
+    function defineComponent(name) {
         Object.defineProperty(uiComponents, name, {
             enumerable: true,
             get() {
@@ -15,6 +16,7 @@
             },
         });
     }
+    nativeNames.forEach(name => defineComponent(name));
     function createCompatibility(id) {
         const owner = String(id || "anonymous");
         if (registry.has(owner)) return registry.get(owner);
