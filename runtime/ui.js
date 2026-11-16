@@ -237,25 +237,33 @@
         }
         return (boundary = KorgBoundary);
     }
-    function Overlay(props) {
+    function Overlay() {
         const render = useState();
         subscribeRender(render);
         React.useEffect(() => { if (!hostState.mounted) { hostState.mounted = true; report(); } }, []);
         hostState.renders += 1;
         if (hostState.phase !== "rendered") { hostState.phase = "rendered"; report(); hostReady(); }
-        const controls = [
-            React.createElement(Native.View, { key: "korg-button", style: { position: "absolute", right: 12, bottom: 24 } }, React.createElement(Button, { title: "K", onPress: open })),
-            React.createElement(Settings, { key: "korg-settings" }),
-        ];
-        const Guard = getBoundary();
-        // The app sits beside the controls, never inside the guard, so a failure in Korg's UI cannot take the app down.
-        return React.createElement(Native.View, { style: { flex: 1 } }, props.children, Guard ? React.createElement(Guard, null, controls) : controls);
+        return React.createElement(Native.View, { pointerEvents: "box-none", style: { position: "absolute", top: 0, right: 12, bottom: 24, alignItems: "flex-end", justifyContent: "flex-end" } },
+            React.createElement(Button, { title: "K", onPress: open }),
+            React.createElement(Settings));
     }
     function KorgWrapper(props) {
         if (!React || !Native) resolveHost();
         // Without React there is nothing to draw with: show the app untouched rather than a blank screen.
         if (!React || !Native || !K.plugins || !K.themes) return props.children === undefined ? null : props.children;
-        return React.createElement(Overlay, props);
+        // renderApplication calls this wrapper with initialProps and children. Keep the original root intact; any
+        // exception while rendering the optional Korg UI is contained so Discord still gets its normal screen.
+        try {
+            const Guard = getBoundary();
+            const controls = React.createElement(Overlay, null);
+            return React.createElement(Native.View, { style: { flex: 1 } }, props.children,
+                Guard ? React.createElement(Guard, null, controls) : controls);
+        } catch (error) {
+            hostState.overlayError = String(error && error.message || error).slice(0, 200);
+            K.reportError("Korg wrapper render error", error);
+            report();
+            return props.children === undefined ? null : props.children;
+        }
     }
     function wrapperProvider() {
         hostState.rootWrapped = true;
@@ -269,7 +277,15 @@
         function combined(params) {
             const Inner = theirs(params);
             if (!Inner || !React) return Inner || KorgWrapper;
-            return function Combined(props) { return React.createElement(KorgWrapper, null, React.createElement(Inner, props)); };
+            return function Combined(props) {
+                try { return React.createElement(KorgWrapper, { initialProps: props.initialProps }, React.createElement(Inner, props)); }
+                catch (error) {
+                    hostState.overlayError = String(error && error.message || error).slice(0, 200);
+                    K.reportError("Korg combined wrapper error", error);
+                    report();
+                    return React.createElement(Inner, props);
+                }
+            };
         }
         combined.__korg = true;
         return combined;

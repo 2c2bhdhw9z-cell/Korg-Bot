@@ -246,7 +246,7 @@ test("UI waits for the host modules, installs its wrapper once they appear, and 
     // react-native's AppRegistry is a lazy getter; merely capturing the module must not read it.
     Object.defineProperty(Native, "AppRegistry", { enumerable: true, get: () => registry });
     let renders = 0;
-    const React = { createElement: (type, props, ...children) => ({ type, props: { ...props, children } }), useState: () => [0, () => { renders++; }], useEffect: callback => { callback(); } };
+    const React = { Component: class Component { constructor(props) { this.props = props; } }, createElement(type, props, ...children) { return { type, props: { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) } }; }, useState: () => [0, () => { renders++; }], useEffect: callback => { callback(); } };
     f.K.metro = { common: {}, findByProps() { return undefined; }, getAll() { return []; }, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
     f.K.patcher = { createScope() { return {
         before(method, target, callback) {
@@ -276,7 +276,12 @@ test("UI waits for the host modules, installs its wrapper once they appear, and 
     assert.equal(wrapperProvider.__korg, true);
     const Wrapper = registry.setWrapperComponentProvider && wrapperProvider({});
     assert.equal(Wrapper.name, "KorgWrapper");
-    const overlay = Wrapper({ children: "the app" });
+    const wrapped = Wrapper({ initialProps: {}, children: "the app" });
+    assert.equal(wrapped.type, Native.View);
+    assert.equal(wrapped.props.children[0], "the app", "the original app remains visible");
+    const guard = wrapped.props.children[1];
+    assert.equal(guard.type.name, "KorgBoundary");
+    const overlay = guard.props.children;
     assert.equal(overlay.type.name, "Overlay");
     overlay.type(overlay.props);
     await Promise.resolve();
@@ -290,7 +295,14 @@ test("UI waits for the host modules, installs its wrapper once they appear, and 
     assert.equal(f.K.ui.status().composed, true);
     assert.notEqual(wrapperProvider, theirs);
     assert.equal(wrapperProvider.__korg, true);
-    assert.equal(typeof wrapperProvider({}), "function");
+    const Combined = wrapperProvider({ initialProps: { fromHost: true } });
+    assert.equal(typeof Combined, "function");
+    const initialProps = { fromHost: true };
+    const combinedTree = Combined({ initialProps, children: "host root" });
+    assert.equal(combinedTree.type.name, "KorgWrapper");
+    assert.equal(combinedTree.props.initialProps, initialProps, "wrapper composition forwards React Native initialProps to Korg");
+    assert.equal(combinedTree.props.children.type.name, "Theirs");
+    assert.equal(combinedTree.props.children.props.initialProps, initialProps, "the previous wrapper receives the same initialProps");
 });
 
 test("real Metro release exports pick the lazy full react-native over partial exports, without reading its getters", () => {
@@ -300,10 +312,10 @@ test("real Metro release exports pick the lazy full react-native over partial ex
         const registry = {
             registerComponent(name, provider) { registrations.set(name, provider); return name; },
             getAppKeys() { return [...registrations.keys()]; },
-            runApplication(name, params) { return { Root: registrations.get(name)(), Wrapper: wrapper && wrapper(params) }; },
+            runApplication(name, params) { const Root = registrations.get(name)(); const Wrapper = wrapper && wrapper(params); return { Root, Wrapper, render: Wrapper ? { type: Wrapper, props: { children: { type: Root, props: params } } } : null }; },
             setWrapperComponentProvider(provider) { wrapper = provider; },
         };
-        const React = { createElement: (type, props) => ({ type, props }), useState() {}, useEffect() {} };
+        const React = { createElement(type, props, ...children) { return { type, props: { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) } }; }, useState() {}, useEffect() {} };
         const partial = { View: "partialView", Text: "partialText" };
         let dangerousReads = 0;
         const native = {};
@@ -312,7 +324,17 @@ test("real Metro release exports pick the lazy full react-native over partial ex
         }
         Object.defineProperty(native, "danger", { get() { dangerousReads++; throw Error("eager RN read"); } });
         const exports = [React, partial, native, registry];
-        const context = vm.createContext({ console, __r: id => exports[id] });
+        const runtimeModules = new Map();
+        const metroRequire = id => exports[id];
+        metroRequire.getModules = () => runtimeModules;
+        function metroDefine(factory, id) {
+            const module = { exports: {} };
+            factory(context, metroRequire, value => value, value => value, module, module.exports, []);
+            runtimeModules.set(id, { publicModule: module, exports: module.exports, isInitialized: true });
+        }
+        const context = vm.createContext({ console });
+        context.__r = metroRequire;
+        context.__d = metroDefine;
         for (const name of ["core", "metro", "patcher", "ui"]) vm.runInContext(runtimeSources[name], context);
         const K = context.__KORG_INTERNAL__;
         K.ui.initialize();
@@ -322,14 +344,8 @@ test("real Metro release exports pick the lazy full react-native over partial ex
         context.__r(2);
         assert.equal(K.ui.status().react, true);
         assert.equal(K.ui.status().reactNative, true, "the full react-native was chosen, not the partial export");
-        if (separateRegistry) {
-            assert.equal(K.ui.status().attached, false, "capturing react-native must not read its AppRegistry getter");
-            context.__r(3);
-        } else {
-            // Only react-native's lazy export leads to the registry: found by a search that runs outside module loading.
-            assert.equal(K.ui.status().attached, false);
-            K.ui.initialize();
-        }
+        context.__r(3);
+        assert.equal(K.ui.status().attached, true, "AppRegistry attaches when its dedicated module finishes loading");
         assert.equal(K.ui.status().phase, "captured");
         assert.equal(K.ui.status().rootWrapped, false);
         assert.equal(registry.registerComponent("Root", () => function Root() {}), "Root");
@@ -340,8 +356,11 @@ test("real Metro release exports pick the lazy full react-native over partial ex
         assert.equal(context.__KORG_DIAGNOSTICS__.ui.rootWrapped, true);
         K.plugins = {};
         K.themes = {};
-        assert.equal(started.Wrapper({}).type.name, "Overlay");
-        assert.equal(dangerousReads, separateRegistry ? 0 : 0, "no unrelated getter was read");
+        const wrapped = started.render.type({ ...started.render.props, initialProps: {} });
+        assert.equal(wrapped.type, "View");
+        assert.equal(wrapped.props.children[0].type, started.Root);
+        assert.equal(wrapped.props.children[1].type.name, "Overlay");
+        assert.equal(dangerousReads, 0, "no lazy or unrelated React Native getter was read during capture");
         assert.equal(K.metro.lastError, undefined);
     }
 });

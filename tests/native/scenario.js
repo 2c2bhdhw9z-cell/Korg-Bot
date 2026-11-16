@@ -53,6 +53,9 @@
     globalThis.ErrorUtils.setGlobalHandler((error, isFatal) => { handled.push({ message: error.message, isFatal }); });
 
     // ---- A very small React ------------------------------------------------------------------------------------------
+    class Component {
+        constructor(props) { this.props = props; this.state = {}; }
+    }
     const instances = new Map();
     let current = null;
     let effects = [];
@@ -94,10 +97,22 @@
         if (typeof element === "string" || typeof element === "number") return { text: String(element) };
         if (Array.isArray(element)) return { list: element.map((child, at) => renderNode(child, `${path}.${at}`)) };
         if (typeof element.type === "function") {
+            const outer = current;
+            if (element.type.prototype && typeof element.type.prototype.render === "function") {
+                const boundary = new element.type(element.props);
+                let child;
+                try { child = renderNode(boundary.render(), `${path}/c`); }
+                catch (error) {
+                    const failed = element.type.getDerivedStateFromError;
+                    if (typeof failed === "function") boundary.state = { ...boundary.state, ...failed(error) };
+                    if (typeof boundary.componentDidCatch === "function") boundary.componentDidCatch(error);
+                    child = renderNode(boundary.render(), `${path}/fallback`);
+                }
+                return { component: element.type.displayName || element.type.name, props: element.props, child };
+            }
             let instance = instances.get(path);
             if (!instance || instance.type !== element.type) { instance = { type: element.type, hooks: [], cursor: 0 }; instances.set(path, instance); }
             instance.cursor = 0;
-            const outer = current;
             current = instance;
             let output;
             try { output = element.type(element.props); } finally { current = outer; }
@@ -137,7 +152,20 @@
     }
     const pressableWithText = label => find(node => node.host === "Pressable" && textOf(node) === label);
     const press = label => { const node = pressableWithText(label); if (!node) throw new Error(`No button labelled ${label}`); node.props.onPress(); };
-    const React = { createElement, useState, useEffect };
+    const React = {
+        Component,
+        createElement(type, props, ...children) {
+            if (globalThis.__throwKorgOverlay && type === components.View && props && props.style && props.style.position === "absolute") {
+                throw new Error("overlay render probe");
+            }
+            return createElement(type, props, ...children);
+        },
+        useState() {
+            if (globalThis.__throwKorgOverlay) throw new Error("overlay render probe");
+            return useState();
+        },
+        useEffect,
+    };
 
     // ---- Discord 353's module graph, as read out of its bytecode ------------------------------------------------------------
     //  * react-native's index is an object of lazy getters; `get AppRegistry()` is `require(<AppRegistry module>).AppRegistry`.
@@ -263,10 +291,19 @@
         function AppRegistryKeys() { return Array.from(providers.keys()).join(); }
         globalThis.RN$AppRegistry.runApplication("Discord", { rootTag: 1, initialProps: {} });
         check(K.ui.status().rootWrapped === true, "the wrapper provider was used when the app ran");
-        check(find(node => node.host === "Text" && textOf(node) === "Discord channel list") !== null, "the app's own screen still renders, inside Korg's wrapper");
+        check(find(node => node.host === "Text" && textOf(node) === "Discord channel list") !== null, "the app's own screen still renders, outside Korg's guarded UI");
         check(pressableWithText("K") !== null, "the K button is on screen");
         check(K.ui.status().phase === "rendered" && K.ui.status().renders >= 1, `the overlay rendered (phase=${K.ui.status().phase})`);
         check(K.ui.status().mounted === true, "the overlay's effects ran");
+        globalThis.__throwKorgOverlay = true;
+        globalThis.RN$AppRegistry.runApplication("Discord", { rootTag: 1, initialProps: {} });
+        globalThis.__throwKorgOverlay = false;
+        check(find(node => node.host === "Text" && textOf(node) === "Discord channel list") !== null, "Discord stays rendered after Korg's overlay throws");
+        check(K.ui.status().overlayError === "overlay render probe", "the React error boundary records Korg's render failure");
+        globalThis.RN$AppRegistry.runApplication("Discord", { rootTag: 1, initialProps: {} });
+        check(pressableWithText("K") !== null, "Discord renders normally on the next tree after the guarded failure");
+        const wrapper = globalThis.RN$AppRegistry.getRunnable("Discord");
+        check(typeof wrapper === "function", "the host's AppRegistry runnable remains installed");
         check(decoy.reads === 0 && decoy.writes === 0, `Discord's persist adapter was never used as storage (reads ${decoy.reads}, writes ${decoy.writes})`);
 
         // 2. Opening settings.
@@ -320,7 +357,7 @@
         check(!K.errors.some(entry => entry.text.indexOf("handled promise probe") >= 0 && entry.text.indexOf("unhandled promise probe") < 0), "a rejection handled a moment later is not reported");
 
         // 8. Nothing else went wrong.
-        const unexpected = K.errors.filter(entry => !/exploded on purpose|fatal probe|second handler probe|unhandled promise probe|Plugin broken\.js failed|Could not restart/.test(entry.text));
+        const unexpected = K.errors.filter(entry => !/exploded on purpose|fatal probe|second handler probe|unhandled promise probe|overlay render probe|Plugin broken\.js failed|Could not restart/.test(entry.text));
         check(unexpected.length === 0, `no unexpected errors were recorded${unexpected.length ? ": " + unexpected.map(entry => entry.text.split("\n")[0]).join(" | ") : ""}`);
         native.report("test\nPASS: scenario finished");
     }
