@@ -25,7 +25,7 @@
         attached: false, phase: "waiting", rootWrapped: false, reason: "Waiting for React Native application registry",
         react: false, reactNative: false, registry: "", composed: false, registered: [], ran: [], renders: 0, mounted: false, overlayError: "",
     };
-    function status() { return { ...hostState, registered: hostState.registered.slice(), ran: hostState.ran.slice() }; }
+    function status() { return { ...hostState, registered: hostState.registered.slice(), ran: hostState.ran.slice(), settings: settingsStatus() }; }
     const names = list => (list.length ? list.join(", ") : "none");
     // The lines the diagnostics screen shows: what Korg found, what it did, and how far the app got.
     function describe() {
@@ -34,6 +34,7 @@
             `Host: React ${s.react ? "found" : "missing"}, react-native ${s.reactNative ? "found" : "missing"}, AppRegistry ${s.registry ? `found (${s.registry})` : "missing"}`,
             `Root: wrapper ${s.attached ? (s.composed ? "installed, combined with another" : "installed") : "not installed"}; apps registered: ${names(s.registered)}; apps run: ${names(s.ran)}`,
             `Overlay: phase=${s.phase}; ${s.renders ? "rendered" : "not rendered"}${s.mounted ? ", mounted" : ""}${s.overlayError ? `; ERROR ${s.overlayError}` : ""}`,
+            `Settings: ${settingsEntry.row ? "Korg row added" : "Korg row not added"}${settingsEntry.section ? ", Korg section in the list" : ""} (${settingsEntry.note})`,
         ];
         if (s.reason) lines.push(`UI note: ${s.reason}`);
         return lines;
@@ -49,6 +50,97 @@
         report();
     }
     const state = { visible: false, url: "", kind: "bundle", notice: "", plugins: [], theme: "graphite", busy: false, settingsId: null };
+
+    // ---- Discord's own settings screen ------------------------------------------------------------------------------
+    // Discord's settings are data driven: SETTING_RENDERER_CONFIG maps a key to what a row does, and `createList` builds
+    // the sections that name those keys. Korg adds one pressable row and one section, so its settings open from the
+    // place a user looks for settings instead of only from the floating control.
+    const SETTINGS_ROW = "KORG_SETTINGS";
+    const SETTINGS_SECTION = "Korg";
+    let settingsConfigModule;
+    let settingsListModule;
+    let settingsPatches;
+    const settingsEntry = { row: false, section: false, note: "waiting for Discord's settings modules" };
+    function settingsStatus() { return { row: settingsEntry.row, section: settingsEntry.section, note: settingsEntry.note }; }
+    function noteSettings(note) {
+        if (settingsEntry.note === note) return;
+        settingsEntry.note = note;
+        report();
+    }
+    // One pressable row. Discord reads `title` and `useTitle` when it draws the list.
+    function settingsRow() {
+        const title = () => "Korg";
+        return { type: "pressable", title, useTitle: title, withArrow: true, onPress: () => open() };
+    }
+    // The config Discord sees is always the same object, updated in place: a plugin that wraps
+    // SETTING_RENDERER_CONFIG itself keeps a reference and spreads it on every read, so later rows must land in it.
+    function adoptSettingRenderers(module, config) {
+        if (settingsConfigModule) return;
+        settingsConfigModule = module;
+        let original = config;
+        const live = {};
+        function rebuild() {
+            try {
+                Object.keys(live).forEach(key => { delete live[key]; });
+                Object.assign(live, original);
+                live[SETTINGS_ROW] = settingsRow();
+            } catch (error) { noteSettings(`settings row failed: ${String(error && error.message || error)}`); }
+        }
+        rebuild();
+        try {
+            Object.defineProperty(module, "SETTING_RENDERER_CONFIG", {
+                enumerable: true, configurable: true,
+                get: () => live,
+                set: value => { if (value === live) return; original = value; rebuild(); report(); },
+            });
+            settingsEntry.row = true;
+            noteSettings("row added to Discord settings");
+        } catch (error) {
+            settingsConfigModule = undefined;
+            noteSettings(`settings row failed: ${String(error && error.message || error)}`);
+        }
+    }
+    // The section goes into the root settings list only: that is the one that holds Discord's ACCOUNT row.
+    function adoptSettingList(module) {
+        if (settingsListModule || !K.patcher) return;
+        settingsListModule = module;
+        try {
+            settingsPatches = settingsPatches || K.patcher.createScope("korg-settings-entry");
+            settingsPatches.after("createList", module, args => {
+                const config = args && args[0];
+                const sections = config && config.sections;
+                if (!Array.isArray(sections)) return;
+                const holds = (section, key) => Boolean(section && Array.isArray(section.settings) && section.settings.indexOf(key) >= 0);
+                if (!sections.some(section => holds(section, "ACCOUNT"))) return;
+                if (sections.some(section => section && (section.label === SETTINGS_SECTION || holds(section, SETTINGS_ROW)))) {
+                    settingsEntry.section = true;
+                    return;
+                }
+                const anchor = sections.findIndex(section => holds(section, "ACCOUNT"));
+                sections.splice(anchor + 1, 0, { label: SETTINGS_SECTION, title: SETTINGS_SECTION, settings: [SETTINGS_ROW] });
+                settingsEntry.section = true;
+                noteSettings(settingsEntry.row ? "row and section added to Discord settings" : "section added before the row");
+                report();
+            });
+            noteSettings("waiting for Discord to build its settings list");
+        } catch (error) {
+            settingsListModule = undefined;
+            noteSettings(`settings section failed: ${String(error && error.message || error)}`);
+        }
+    }
+    // One descriptor look per module that finishes loading, so this costs nothing per module and never initializes one.
+    function considerSettings(exports) {
+        if (!isObject(exports) || (settingsConfigModule && settingsListModule)) return;
+        try {
+            if (!settingsConfigModule && ownKey(exports, "SETTING_RENDERER_CONFIG")) {
+                let config = ownValue(exports, "SETTING_RENDERER_CONFIG");
+                // Only this named export is read through its getter; other modules stay untouched.
+                if (config === undefined) { try { config = exports.SETTING_RENDERER_CONFIG; } catch { config = undefined; } }
+                if (isObject(config) && !Array.isArray(config)) adoptSettingRenderers(exports, config);
+            }
+            if (!settingsListModule && typeof ownValue(exports, "createList") === "function") adoptSettingList(exports);
+        } catch (error) { noteSettings(`settings lookup failed: ${String(error && error.message || error)}`); }
+    }
 
     // ---- Recognising the host's modules without reading anything that could run host code --------------------------
     const isObject = value => value !== null && (typeof value === "object" || typeof value === "function");
@@ -360,7 +452,7 @@
     function onCapture(value) {
         if (capturing) return;
         capturing = true;
-        try { if (!React || !Native || !registry) { considerExports(value); if (registry && !providerInstalled) progress(); } }
+        try { considerSettings(value); if (!React || !Native || !registry) { considerExports(value); if (registry && !providerInstalled) progress(); } }
         catch (error) { K.log.warn("Korg could not inspect a module", error); }
         finally { capturing = false; }
         if (React && Native && registry) { /* nothing more to look for */ } else startHeartbeat();

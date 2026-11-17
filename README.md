@@ -8,7 +8,7 @@ The supplied IPA is Discord **353.0, build 122208**, arm64, with `cryptid=0` and
 
 - Nine original core modules: state/logging, Metro discovery, scoped patching, persistent storage, compatibility adapters, palettes, URL plugins, host-native controls, and startup.
 - Six own palettes: **Graphite, Ember, Glacier, Orchard, Plum, Paper**. They color Korg's controls and settings; they do not implement full Discord themes.
-- An empty plugin registry. No plugin implementations or external runtime dependencies are bundled.
+- A Korg section in Discord's own settings screen: one pressable row and one section, registered through the host's data-driven `SETTING_RENDERER_CONFIG` and `createList` (`runtime/ui.js`). The floating **K** control remains as a fallback when those modules are not found.
 - Partial, independently implemented `window.vendetta` / `window.bunny` adapters. Familiar API names do not mean universal legacy-plugin support. See [the API contract](docs/API.md).
 - An original Objective-C++ loader using Apple's Objective-C runtime and system libraries, which evaluates the bundled local JavaScript resource (`KorgResources.bundle/korg.js`). No RainTweak, Theos, Substrate, or ElleKit build path is required by the new loader.
 

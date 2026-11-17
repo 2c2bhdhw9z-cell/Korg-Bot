@@ -54,7 +54,7 @@ Counts are files, not runtime dependencies. Every path in the enumerated snapsho
 - `runtime/compat.js`: original partial `window.vendetta` / `window.bunny` adapters with scoped patch/storage ownership; no universal compatibility claim.
 - `runtime/themes.js`: six own palettes, Graphite/Ember/Glacier/Orchard/Plum/Paper, applied to Korg controls only.
 - `runtime/plugins.js`: empty-by-default plugin registry, user-entered HTTPS bundle/manifest retrieval, cache, explicit enable and lifecycle cleanup. This is original loader code, not bundled plugin implementations; enabled remote code runs with host privileges.
-- `runtime/ui.js`: original host-native controls and root-registration wrapper, URL operations, plugin settings and palette selection.
+- `runtime/ui.js`: original host-native controls and root-registration wrapper, URL operations, plugin settings and palette selection, and a Korg row and section in Discord's data-driven settings (`SETTING_RENDERER_CONFIG` plus `createList`, inserted after the Account section).
 - `runtime/start.js`: synchronous early setup and explicit boot state; readiness flags alone do not prove the host UI works.
 
 ### Scripts — 7

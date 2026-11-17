@@ -510,6 +510,52 @@ test("the wrapper works whichever host module loads first, and for an app regist
     }
 });
 
+test("Korg adds a row and a section to Discord's data-driven settings, and its row opens Korg's settings", async () => {
+    const host = hostFixture();
+    const { K, context } = await runtime({ __r: host.require, __d: host.define }, modules);
+    for (const name of ["themes", "plugins", "ui", "start"]) {
+        vm.runInContext(await readFile(path.join(repoRoot, "runtime", `${name}.js`), "utf8"), context);
+    }
+    // Discord's settings modules initialize after Korg is watching, as they do on a device.
+    const accountRow = { type: "pressable", title: () => "Account" };
+    const settingsModule = { SETTING_RENDERER_CONFIG: { ACCOUNT: accountRow } };
+    const listModule = { createList(config) { return config.sections.length; } };
+    host.publish(context, 10, settingsModule);
+    host.publish(context, 11, listModule);
+    const config = settingsModule.SETTING_RENDERER_CONFIG;
+    assert.equal(K.ui.status().settings.row, true, "the Korg row was registered");
+    assert.equal(config.ACCOUNT, accountRow, "Discord's own rows are unchanged");
+    assert.equal(config.KORG_SETTINGS.type, "pressable");
+    assert.equal(config.KORG_SETTINGS.title(), "Korg");
+    assert.equal(config.KORG_SETTINGS.withArrow, true);
+    // The root settings list is the one that names Discord's ACCOUNT row.
+    const sections = [
+        { label: "Account", title: "Account", settings: ["ACCOUNT"] },
+        { label: "Privacy", title: "Privacy", settings: ["PRIVACY"] },
+    ];
+    listModule.createList({ sections });
+    assert.deepEqual(plain(sections.map(section => section.label)), ["Account", "Korg", "Privacy"], "the Korg section follows Account");
+    assert.deepEqual(plain(sections[1].settings), ["KORG_SETTINGS"]);
+    assert.equal(K.ui.status().settings.section, true);
+    // Rebuilding the list must not add a second Korg section, and lists without ACCOUNT are left alone.
+    listModule.createList({ sections });
+    assert.equal(sections.filter(section => section.label === "Korg").length, 1);
+    const pluginPage = [{ label: "Plugin", title: "Plugin", settings: ["SOMETHING_ELSE"] }];
+    listModule.createList({ sections: pluginPage });
+    assert.equal(pluginPage.length, 1, "a non-root settings list is not modified");
+    // Pressing Discord's Korg row opens Korg's own settings sheet.
+    host.publishAll(context);
+    host.AppRegistry.registerComponent("Root", () => function Root() {});
+    const wrapped = host.AppRegistry.runApplication("Root", {});
+    const overlay = wrapped.type(wrapped.props).props.children[1].props.children;
+    const rendered = overlay.type(overlay.props);
+    const sheet = rendered.props.children[1];
+    assert.equal(sheet.type(sheet.props).props.visible, false, "the settings sheet starts closed");
+    config.KORG_SETTINGS.onPress();
+    assert.equal(sheet.type(sheet.props).props.visible, true, "Discord's Korg row opens Korg settings");
+    assert.match(K.ui.status().settings.note, /row/);
+});
+
 test("attaching costs nothing per module, and the registry global is captured when it is assigned", async () => {
     const host = hostFixture();
     const { K, context } = await runtime({ __r: host.require, __d: host.define }, modules);
