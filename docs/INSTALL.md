@@ -51,17 +51,38 @@ The **Build Korg loader** workflow is the macOS build route. Its later actual ou
 
 ## Package a separate app copy
 
-After a successful actual native build, the intended CLI is:
+### In GitHub Actions (recommended)
+
+The **Package Korg IPA** workflow (`.github/workflows/package-ipa.yml`) builds the loader on macOS and runs the packager. It needs only one thing the repository cannot provide: your Discord IPA.
+
+What it must be: **Discord 353.0, build 122208**, `arm64`, the app executable **unencrypted** (`cryptid=0`), as a normal `.ipa` whose `Payload/` holds exactly one app bundle with `CFBundleIdentifier com.hammerandchisel.discord`. The packager refuses any other version, identifier, encrypted image, extra app, or already-signed-output name. It does not decrypt or download Discord for you.
+
+How to run it: **Actions → Package Korg IPA → Run workflow**, then either
+
+- `ipa_url`: an HTTPS link to that file that the runner can download (your storage, signed URL, or a release you control). Add `ipa_sha256` to have a different file refused; or
+- `ipa_run_id` + `ipa_artifact_name`: upload the IPA as an artifact in a run of this repository (for example `gh workflow run` a small upload workflow, or attach it to any existing run) and point at that run. The default artifact name is `discord-353-ipa`.
+
+The run always smoke-packages a synthetic Discord-353-shaped app first, then packages your file, verifies the result, and uploads **`Korg-unsigned-ipa`** with `Korg-353-unsigned.inspection.json` and the packager log. Output is unsigned.
+
+### Locally
 
 ```sh
+npm run build && npm run build:native          # macOS, full Xcode
+(cd artifacts/native && zip -r -X -D ../native-components.zip .)
+sha256sum artifacts/native-components.zip      # shasum -a 256 on macOS
 python3 scripts/package-ipa.py \
   --ipa /path/to/Discord-353.ipa \
-  --loader-zip /path/to/native-components.zip \
+  --loader-zip artifacts/native-components.zip \
   --expected-loader-sha256 TRUSTED_ZIP_SHA256 \
   --output /path/to/Korg-353-unsigned.ipa
+python3 scripts/smoke-package-ipa.py --verify /path/to/Korg-353-unsigned.ipa
 ```
 
-Use an archive whose root contains the collected component files, and obtain its trusted SHA-256 from the actual build. To make one from `artifacts/native/`, run `cd artifacts/native && zip -r -X -D ../native-components.zip .`; folder entries are tolerated, but the file list must match the manifest exactly. The runtime builder, collector, and packager agree on one manifest contract, and the packager refuses an archive that does not match it.
+Use an archive whose root contains the collected component files, and obtain its trusted SHA-256 from the actual build. Folder entries are tolerated, but the file list must match the manifest exactly. The runtime builder, collector, and packager agree on one manifest contract, and the packager refuses an archive that does not match it.
+
+### Smoke-package without the proprietary file
+
+`npm run package:smoke` builds a synthetic Discord-353-shaped app (real bundle identity and version, an arm64 unencrypted executable, a framework, a nested extension, stale signatures), runs the same packager on it, then re-opens the output and checks the injected `KorgLoader.dylib` load command, the loader bytes, the runtime resources and the removal of old signatures. With no native build it injects a synthetic arm64 dylib, so it also runs on Linux; on macOS the workflow uses the loader that build actually compiled. A synthetic host is a packaging check, not Discord and not device behavior.
 
 The original packager is designed to preserve the supplied input, validate Mach-O/ZIP structure and dependencies, add `KorgLoader.dylib` and `KorgResources.bundle`, rename the app to “Korg”, remove old signatures and recognized legacy tweak resources if encountered, and produce a separate unsigned IPA plus `<output>.inspection.json`. It refuses to run if either output file already exists. The clean supplied 353 input does not require an old tweak to be present. The packager does not remove encryption or download Discord.
 

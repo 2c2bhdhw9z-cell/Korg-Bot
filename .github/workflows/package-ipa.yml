@@ -1,0 +1,166 @@
+name: Package Korg IPA
+
+# Two modes:
+#   push / dispatch without inputs: package a synthetic Discord-353-shaped app with the loader this
+#     commit builds, and upload it as Korg-unsigned-ipa-smoke. This proves the packaging path and the
+#     loader injection on macOS without any proprietary file.
+#   workflow_dispatch with an input: additionally package *your* Discord 353.0 (build 122208) IPA and
+#     upload it as Korg-unsigned-ipa. See docs/INSTALL.md for what that input must be.
+
+on:
+  push:
+    branches: [main, 'maipa-g/**']
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: 'HTTPS URL of your Discord 353.0 (build 122208, arm64, cryptid=0) .ipa'
+        required: false
+        default: ''
+      ipa_sha256:
+        description: 'Optional SHA-256 of that file; packaging refuses a different file'
+        required: false
+        default: ''
+      ipa_run_id:
+        description: 'Instead of a URL: the Actions run id that holds your IPA as an artifact'
+        required: false
+        default: ''
+      ipa_artifact_name:
+        description: 'Artifact name holding your IPA in that run'
+        required: false
+        default: 'discord-353-ipa'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: korg-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out Korg
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Check toolchain
+        run: |
+          node --version
+          python3 --version
+          xcodebuild -version
+
+      - name: Build and verify the runtime
+        run: |
+          npm run build
+          npm run verify
+
+      - name: Compile and collect the native loader
+        run: |
+          mkdir -p .build/native
+          set -o pipefail
+          bash scripts/build-native.sh 2>&1 | tee .build/native/native-build.log
+
+      - name: Package native components exactly as the packager expects
+        id: native
+        run: |
+          set -o pipefail
+          (cd artifacts/native && zip -r -X -D ../native-components.zip .)
+          digest="$(shasum -a 256 artifacts/native-components.zip | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Native artifact SHA-256: $digest"
+
+      # Real loader, synthetic host: proves package-ipa.py injects and verifies the built dylib.
+      - name: Smoke-package a synthetic Discord-353 IPA
+        run: |
+          mkdir -p .build/ipa
+          python3 scripts/smoke-package-ipa.py \
+            --native-dir artifacts/native \
+            --expected-loader-sha256 "${{ steps.native.outputs.digest }}" \
+            --output .build/ipa/Korg-smoke-unsigned.ipa
+
+      - name: Upload the smoke IPA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-unsigned-ipa-smoke
+          path: |
+            .build/ipa/Korg-smoke-unsigned.ipa
+            .build/ipa/Korg-smoke-unsigned.inspection.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check that a Discord IPA was supplied
+        id: supplied
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+          IPA_RUN_ID: ${{ inputs.ipa_run_id }}
+        run: |
+          if [ -n "$IPA_URL" ] || [ -n "$IPA_RUN_ID" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "No Discord IPA supplied, so only the synthetic smoke IPA was built."
+            echo "Re-run with ipa_url (an HTTPS link you host) or ipa_run_id + ipa_artifact_name."
+          fi
+
+      - name: Fetch your Discord IPA from a URL
+        if: steps.supplied.outputs.available == 'true' && inputs.ipa_url != ''
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+          IPA_SHA256: ${{ inputs.ipa_sha256 }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/ipa-input"
+          curl --fail --location --retry 3 --retry-delay 5 \
+            --output "$RUNNER_TEMP/ipa-input/Discord-353.ipa" "$IPA_URL"
+          if [ -n "$IPA_SHA256" ]; then
+            actual="$(shasum -a 256 "$RUNNER_TEMP/ipa-input/Discord-353.ipa" | cut -d' ' -f1)"
+            if [ "$actual" != "$IPA_SHA256" ]; then
+              echo "Supplied IPA SHA-256 is $actual, not the expected $IPA_SHA256" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Fetch your Discord IPA from an Actions artifact
+        if: steps.supplied.outputs.available == 'true' && inputs.ipa_url == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IPA_RUN_ID: ${{ inputs.ipa_run_id }}
+          IPA_ARTIFACT: ${{ inputs.ipa_artifact_name }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/ipa-input"
+          gh run download "$IPA_RUN_ID" --name "$IPA_ARTIFACT" --dir "$RUNNER_TEMP/ipa-input"
+          ls -l "$RUNNER_TEMP/ipa-input"
+
+      - name: Package your Discord IPA
+        if: steps.supplied.outputs.available == 'true'
+        run: |
+          set -o pipefail
+          ipa="$(find "$RUNNER_TEMP/ipa-input" -name '*.ipa' -type f | head -n 1)"
+          if [ -z "$ipa" ]; then
+            echo "No .ipa file was found in the supplied input." >&2
+            exit 1
+          fi
+          mkdir -p .build/ipa
+          python3 scripts/package-ipa.py \
+            --ipa "$ipa" \
+            --loader-zip artifacts/native-components.zip \
+            --expected-loader-sha256 "${{ steps.native.outputs.digest }}" \
+            --output .build/ipa/Korg-353-unsigned.ipa | tee .build/ipa/package-report.json
+          python3 scripts/smoke-package-ipa.py --verify .build/ipa/Korg-353-unsigned.ipa
+
+      - name: Upload the unsigned Korg IPA
+        if: steps.supplied.outputs.available == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-unsigned-ipa
+          path: |
+            .build/ipa/Korg-353-unsigned.ipa
+            .build/ipa/Korg-353-unsigned.inspection.json
+            .build/ipa/package-report.json
+          if-no-files-found: error
+          retention-days: 14

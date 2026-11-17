@@ -12,6 +12,7 @@
     "test": "node --test tests/*.test.mjs",
     "verify": "node scripts/verify.mjs",
     "prepare:native": "node scripts/build.mjs && node scripts/verify.mjs",
+    "package:smoke": "python3 scripts/smoke-package-ipa.py --output .build/smoke/Korg-smoke-unsigned.ipa",
     "build:native": "bash scripts/build-native.sh"
   }
 }

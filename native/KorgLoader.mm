@@ -492,7 +492,7 @@ static NSString *diagnostics() {
   NSArray *errors = [javaScriptErrors copy];
   [diagnosticLock unlock];
   NSMutableString *text = [NSMutableString stringWithString:
-      @"Korg UI: a floating K control, plus a Korg section in Discord settings when that module is found\n\n"];
+      @"Korg UI: a floating K control, plus a Korg row and section in Discord settings when Discord's settings modules are found (runtime status says which)\n\n"];
   NSDictionary *info = [NSBundle mainBundle].infoDictionary;
   [text appendFormat:@"app: Discord %@ (%@)\n", info[@"CFBundleShortVersionString"] ?: @"?", info[@"CFBundleVersion"] ?: @"?"];
   for (NSString *key in @[@"constructor", @"identity", @"safe mode", @"hook", @"callbacks", @"layout", @"reporter", @"storage",

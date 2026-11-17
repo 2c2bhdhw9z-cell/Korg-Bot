@@ -20,11 +20,11 @@ Counts are files, not runtime dependencies. Every path in the enumerated snapsho
 | Documentation | 3 | API, installation, audit |
 | Native | 2 | Original loader and ABI contract |
 | Runtime | 9 | Fixed local bundle inputs |
-| Build/development scripts | 7 | Local build, verify, compile, collect, package, preview, Hermes loop-capture check |
+| Build/development scripts | 8 | Local build, verify, compile, collect, package, synthetic packaging smoke, preview, Hermes loop-capture check |
 | Browser preview | 4 | Original local settings design |
 | Tests | 10 | Runtime/plugin/native/preview/Hermes, real-engine harness and scenario, and packaging checks |
-| CI | 1 | macOS build workflow |
-| **Total** | **41** | **No listed file omitted** |
+| CI | 2 | macOS build workflow and IPA packaging workflow |
+| **Total** | **43** | **No listed file omitted** |
 
 ### Root metadata — 5
 
@@ -57,13 +57,14 @@ Counts are files, not runtime dependencies. Every path in the enumerated snapsho
 - `runtime/ui.js`: original host-native controls and root-registration wrapper, URL operations, plugin settings and palette selection, and a Korg row and section in Discord's data-driven settings (`SETTING_RENDERER_CONFIG` plus `createList`, inserted after the Account section).
 - `runtime/start.js`: synchronous early setup and explicit boot state; readiness flags alone do not prove the host UI works.
 
-### Scripts — 7
+### Scripts — 8
 
 - `scripts/build.mjs`: fixed nine-file local concatenation and syntax check; emits source hashes with `plugins: []`, `dependencies: []`. No upstream fetch or package installation.
 - `scripts/verify.mjs`: verifies exact local input set, source hashes, deterministic bundle bytes, empty plugin/dependency arrays and syntax. Hashes establish contents, not authorship or device compatibility.
 - `scripts/build-native.sh`: direct Xcode arm64 compilation with Apple frameworks/libc++; no RainTweak, Theos or external hook-runtime setup.
 - `scripts/collect-native.py`: system-dependency allowlist, component/source hash manifest and source archive collection.
-- `scripts/package-ipa.py`: original ZIP/Mach-O validation and unsigned Discord 353 packaging path. The native and runtime manifest versions/fields are now aligned. Synthetic tests passed; the exact compiled artifact and supplied IPA must also pass the final packaging checks.
+- `scripts/package-ipa.py`: original ZIP/Mach-O validation and unsigned Discord 353 packaging path. The native and runtime manifest versions/fields are now aligned. Synthetic tests pass; the exact compiled artifact and supplied IPA must also pass the final packaging checks.
+- `scripts/smoke-package-ipa.py`: builds a synthetic Discord-353-shaped app, runs `package-ipa.py` as CI does, and re-opens the packaged output to check the loader load command, loader bytes, runtime resources and signature removal. Also verifies an already packaged IPA (`--verify`). A synthetic host proves the packaging path, not Discord or device behavior.
 - `scripts/hermes-scope-check.mjs`: finds closures that capture `let`/`const` variables declared inside a loop, by analyzing the ESTree that `hermesc -dump-ast` prints. Hermes shares one binding across iterations, so such closures all see the last value.
 - `scripts/preview.mjs`: replaced with an independent local HTTP asset server using only Node built-ins. The previous implementation and its MPL header were removed rather than relicensed; history retains the old notice.
 
@@ -87,9 +88,10 @@ The preview is deliberately separate from the actual URL downloader/evaluator in
 - `tests/hermes.test.mjs`: compiles `dist/korg.js` with a Hermes compiler when one is available (`HERMESC` or the `hermes-compiler` npm package); skipped otherwise.
 - `tests/test_package_ipa.py`: synthetic Mach-O/ZIP fixtures, package preservation, legacy-resource removal, artifact hashes and rejection cases. Fixtures do not establish real supplied-IPA packaging success.
 
-### CI — 1 file, 2 jobs
+### CI — 2 files, 3 jobs
 
 - `.github/workflows/build-native.yml`: macOS checkout, local build/test, native collection and artifact upload. Pinned runner actions are infrastructure, not incorporated runtime dependencies. A workflow file is not evidence that it has passed.
+- `.github/workflows/package-ipa.yml`: macOS packaging. Every push packages a synthetic Discord-353-shaped app with the loader that commit built and uploads `Korg-unsigned-ipa-smoke`; a manual run given the user's own Discord 353 IPA (a URL they host or an artifact of a run in this repository) packages that file, verifies the output and uploads `Korg-unsigned-ipa`. The workflow never fetches Discord by itself and holds no signing material.
 
 ## License and historical boundary
 
