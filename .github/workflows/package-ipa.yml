@@ -73,12 +73,13 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "Native artifact SHA-256: $digest"
 
-      # Real loader, synthetic host: proves package-ipa.py injects and verifies the built dylib.
+      # Real loader archive, synthetic host: proves package-ipa.py injects and verifies the built dylib.
+      # The archive is the one the real packaging step below uses, trusted by the digest computed above.
       - name: Smoke-package a synthetic Discord-353 IPA
         run: |
           mkdir -p .build/ipa
           python3 scripts/smoke-package-ipa.py \
-            --native-dir artifacts/native \
+            --loader-zip artifacts/native-components.zip \
             --expected-loader-sha256 "${{ steps.native.outputs.digest }}" \
             --output .build/ipa/Korg-smoke-unsigned.ipa
 
