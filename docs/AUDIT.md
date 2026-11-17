@@ -91,7 +91,7 @@ The preview is deliberately separate from the actual URL downloader/evaluator in
 ### CI — 2 files, 3 jobs
 
 - `.github/workflows/build-native.yml`: macOS checkout, local build/test, native collection and artifact upload. Pinned runner actions are infrastructure, not incorporated runtime dependencies. A workflow file is not evidence that it has passed.
-- `.github/workflows/package-ipa.yml`: macOS packaging. Every push packages a synthetic Discord-353-shaped app with the loader that commit built and uploads `Korg-unsigned-ipa-smoke`; a manual run given the user's own Discord 353 IPA (a URL they host or an artifact of a run in this repository) packages that file, verifies the output and uploads `Korg-unsigned-ipa`. The workflow never fetches Discord by itself and holds no signing material.
+- `.github/workflows/package-ipa.yml`: macOS packaging. Every push packages a synthetic Discord-353-shaped app with the loader that commit built and uploads `Korg-unsigned-ipa-smoke`; a manual run given the user's own Discord 353 IPA (an asset of a release in this repository, a URL they host, or an artifact of a run in this repository) packages that file, verifies the output and uploads `Korg-unsigned-ipa`; a published release that carries a `.ipa` starts that run on its own from the default branch. The workflow never fetches Discord by itself and holds no signing material.
 
 ## License and historical boundary
 

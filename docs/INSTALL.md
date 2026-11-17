@@ -57,10 +57,13 @@ The **Package Korg IPA** workflow (`.github/workflows/package-ipa.yml`) builds t
 
 What it must be: **Discord 353.0, build 122208**, `arm64`, the app executable **unencrypted** (`cryptid=0`), as a normal `.ipa` whose `Payload/` holds exactly one app bundle with `CFBundleIdentifier com.hammerandchisel.discord`. The packager refuses any other version, identifier, encrypted image, extra app, or already-signed-output name. It does not decrypt or download Discord for you.
 
-How to run it: **Actions → Package Korg IPA → Run workflow**, then either
+**The file never has to be handed to anyone.** Attach it to a **release in this repository** instead. Create a release and drag the `.ipa` in as a release asset — a browser upload accepts a file this size, and a release asset may be up to 2 GB. Then run the workflow with `ipa_release_tag` set to that release's tag (and `ipa_release_asset` if the release holds more than one `.ipa`); the runner downloads it with the workflow's own token, so a private repository is fine. Once this workflow file is on the default branch, publishing a release that contains a `.ipa` also starts the run by itself — GitHub only fires `release` events for workflows on the default branch, so on a pull-request branch use **Run workflow** with `ipa_release_tag`.
 
+How to run it: **Actions → Package Korg IPA → Run workflow**, then use one of
+
+- `ipa_release_tag` + optional `ipa_release_asset`: a release of this repository carrying your `.ipa` (the route above); or
 - `ipa_url`: an HTTPS link to that file that the runner can download (your storage, signed URL, or a release you control). Add `ipa_sha256` to have a different file refused; or
-- `ipa_run_id` + `ipa_artifact_name`: upload the IPA as an artifact in a run of this repository (for example `gh workflow run` a small upload workflow, or attach it to any existing run) and point at that run. The default artifact name is `discord-353-ipa`.
+- `ipa_run_id` + `ipa_artifact_name`: point at a run of this repository whose artifact holds the IPA. The default artifact name is `discord-353-ipa`.
 
 The run always smoke-packages a synthetic Discord-353-shaped app first, then packages your file, verifies the result, and uploads **`Korg-unsigned-ipa`** with `Korg-353-unsigned.inspection.json` and the packager log. Output is unsigned.
 
