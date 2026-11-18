@@ -1,0 +1,244 @@
+name: Package Korg IPA
+
+# Two modes:
+#   push / dispatch without inputs: package a synthetic Discord-353-shaped app with the loader this
+#     commit builds, and upload it as Korg-unsigned-ipa-smoke. This proves the packaging path and the
+#     loader injection on macOS without any proprietary file.
+#   dispatch with an input, or a release (published or draft) that has a .ipa asset: additionally package *your*
+#     Discord 353.0 (build 122208) IPA and upload it as Korg-unsigned-ipa. Nothing has to be uploaded
+#     to a chat: attach the .ipa to a release in this repository and the runner fetches it itself.
+#     See docs/INSTALL.md for what that input must be.
+
+on:
+  push:
+    branches: [main, 'maipa-g/**']
+  workflow_dispatch:
+    inputs:
+      ipa_release_tag:
+        description: 'Easiest: tag of a release in this repository that has your .ipa attached'
+        required: false
+        default: ''
+      ipa_release_asset:
+        description: 'Optional: exact .ipa asset name in that release (default: every *.ipa asset)'
+        required: false
+        default: ''
+      ipa_url:
+        description: 'HTTPS URL of your Discord 353.0 (build 122208, arm64, cryptid=0) .ipa'
+        required: false
+        default: ''
+      ipa_sha256:
+        description: 'Optional SHA-256 of that file; packaging refuses a different file'
+        required: false
+        default: ''
+      ipa_run_id:
+        description: 'Instead of a URL: the Actions run id that holds your IPA as an artifact'
+        required: false
+        default: ''
+      ipa_artifact_name:
+        description: 'Artifact name holding your IPA in that run'
+        required: false
+        default: 'discord-353-ipa'
+  release:
+    types: [published]
+
+# contents: write is what lets the run see a draft release at all: GitHub only returns drafts to
+# tokens with write access. Keeping the release a draft is how the supplied IPA stays private, and
+# no pull_request trigger exists, so code from a fork never runs with this token.
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: korg-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out Korg
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Check toolchain
+        run: |
+          node --version
+          python3 --version
+          xcodebuild -version
+
+      - name: Build and verify the runtime
+        run: |
+          npm run build
+          npm run verify
+
+      - name: Compile and collect the native loader
+        run: |
+          mkdir -p .build/native
+          set -o pipefail
+          bash scripts/build-native.sh 2>&1 | tee .build/native/native-build.log
+
+      - name: Package native components exactly as the packager expects
+        id: native
+        run: |
+          set -o pipefail
+          (cd artifacts/native && zip -r -X -D ../native-components.zip .)
+          digest="$(shasum -a 256 artifacts/native-components.zip | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Native artifact SHA-256: $digest"
+
+      # Real loader archive, synthetic host: proves package-ipa.py injects and verifies the built dylib.
+      # The archive is the one the real packaging step below uses, trusted by the digest computed above.
+      - name: Smoke-package a synthetic Discord-353 IPA
+        run: |
+          mkdir -p .build/ipa
+          python3 scripts/smoke-package-ipa.py \
+            --loader-zip artifacts/native-components.zip \
+            --expected-loader-sha256 "${{ steps.native.outputs.digest }}" \
+            --output .build/ipa/Korg-smoke-unsigned.ipa
+
+      - name: Upload the smoke IPA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-unsigned-ipa-smoke
+          path: |
+            .build/ipa/Korg-smoke-unsigned.ipa
+            .build/ipa/Korg-smoke-unsigned.inspection.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check that a Discord IPA was supplied
+        id: supplied
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.ipa_release_tag }}
+          RELEASE_TAG_EVENT: ${{ github.event.release.tag_name }}
+          IPA_URL: ${{ inputs.ipa_url }}
+          IPA_RUN_ID: ${{ inputs.ipa_run_id }}
+        run: |
+          set -euo pipefail
+          release_tag="${RELEASE_TAG_INPUT:-$RELEASE_TAG_EVENT}"
+          available=false
+          if [ -n "$IPA_URL" ] || [ -n "$IPA_RUN_ID" ]; then
+            available=true
+          fi
+          if [ -n "$release_tag" ]; then
+            if [ -n "$RELEASE_TAG_INPUT" ]; then
+              # An explicit tag: the fetch step below reports a release or asset that is not there.
+              available=true
+            elif grep -Eq '"name"[[:space:]]*:[[:space:]]*"[^"]*\.ipa"' "$GITHUB_EVENT_PATH"; then
+              available=true
+            else
+              echo "Release $release_tag has no .ipa asset, so only the synthetic smoke IPA is built."
+            fi
+          fi
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          if [ "$available" = false ]; then
+            echo "No Discord IPA supplied, so only the synthetic smoke IPA was built."
+            echo "Easiest route: attach your .ipa to a release in this repository and publish it."
+            echo "Otherwise re-run with ipa_url (an HTTPS link you host) or ipa_run_id + ipa_artifact_name."
+          fi
+
+      - name: Fetch your Discord IPA from a release in this repository
+        if: steps.supplied.outputs.available == 'true' && inputs.ipa_url == '' && steps.supplied.outputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.supplied.outputs.release_tag }}
+          RELEASE_ASSET: ${{ inputs.ipa_release_asset }}
+          IPA_SHA256: ${{ inputs.ipa_sha256 }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/ipa-input"
+          # Not `gh release download`: that looks the tag up first, and a draft is not returned by
+          # the by-tag lookup. Listing releases returns drafts (with contents: write), and the
+          # asset is then fetched by id.
+          gh api "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          release_id="$(jq -r --arg tag "$RELEASE_TAG" '[.[] | select(.tag_name == $tag)][0].id // empty' "$RUNNER_TEMP/releases.json")"
+          if [ -z "$release_id" ]; then
+            echo "No release with tag '$RELEASE_TAG' is visible to this run's token." >&2
+            exit 1
+          fi
+          gh api "repos/$GH_REPO/releases/$release_id/assets?per_page=100" > "$RUNNER_TEMP/assets.json"
+          if [ -n "$RELEASE_ASSET" ]; then
+            jq -r --arg name "$RELEASE_ASSET" '.[] | select(.name == $name) | "\(.id)\t\(.name)"' "$RUNNER_TEMP/assets.json" > "$RUNNER_TEMP/picked.tsv"
+          else
+            jq -r '.[] | select(.name | endswith(".ipa")) | "\(.id)\t\(.name)"' "$RUNNER_TEMP/assets.json" > "$RUNNER_TEMP/picked.tsv"
+          fi
+          if [ ! -s "$RUNNER_TEMP/picked.tsv" ]; then
+            echo "Release $RELEASE_TAG has no matching .ipa asset." >&2
+            exit 1
+          fi
+          while IFS="$(printf '\t')" read -r asset_id asset_name; do
+            gh api -H "Accept: application/octet-stream" "repos/$GH_REPO/releases/assets/$asset_id" \
+              > "$RUNNER_TEMP/ipa-input/$asset_name"
+          done < "$RUNNER_TEMP/picked.tsv"
+          if [ -n "$IPA_SHA256" ]; then
+            ipa="$(find "$RUNNER_TEMP/ipa-input" -name '*.ipa' -type f | head -n 1)"
+            actual="$(shasum -a 256 "$ipa" | cut -d' ' -f1)"
+            if [ "$actual" != "$IPA_SHA256" ]; then
+              echo "Supplied IPA SHA-256 is $actual, not the expected $IPA_SHA256" >&2
+              exit 1
+            fi
+          fi
+          ls -l "$RUNNER_TEMP/ipa-input"
+
+      - name: Fetch your Discord IPA from a URL
+        if: steps.supplied.outputs.available == 'true' && inputs.ipa_url != ''
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+          IPA_SHA256: ${{ inputs.ipa_sha256 }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/ipa-input"
+          curl --fail --location --retry 3 --retry-delay 5 \
+            --output "$RUNNER_TEMP/ipa-input/Discord-353.ipa" "$IPA_URL"
+          if [ -n "$IPA_SHA256" ]; then
+            actual="$(shasum -a 256 "$RUNNER_TEMP/ipa-input/Discord-353.ipa" | cut -d' ' -f1)"
+            if [ "$actual" != "$IPA_SHA256" ]; then
+              echo "Supplied IPA SHA-256 is $actual, not the expected $IPA_SHA256" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Fetch your Discord IPA from an Actions artifact
+        if: steps.supplied.outputs.available == 'true' && inputs.ipa_url == '' && steps.supplied.outputs.release_tag == '' && inputs.ipa_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IPA_RUN_ID: ${{ inputs.ipa_run_id }}
+          IPA_ARTIFACT: ${{ inputs.ipa_artifact_name }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/ipa-input"
+          gh run download "$IPA_RUN_ID" --name "$IPA_ARTIFACT" --dir "$RUNNER_TEMP/ipa-input"
+          ls -l "$RUNNER_TEMP/ipa-input"
+
+      - name: Package your Discord IPA
+        if: steps.supplied.outputs.available == 'true'
+        run: |
+          set -o pipefail
+          ipa="$(find "$RUNNER_TEMP/ipa-input" -name '*.ipa' -type f | head -n 1)"
+          if [ -z "$ipa" ]; then
+            echo "No .ipa file was found in the supplied input." >&2
+            exit 1
+          fi
+          mkdir -p .build/ipa
+          python3 scripts/package-ipa.py \
+            --ipa "$ipa" \
+            --loader-zip artifacts/native-components.zip \
+            --expected-loader-sha256 "${{ steps.native.outputs.digest }}" \
+            --output .build/ipa/Korg-353-unsigned.ipa | tee .build/ipa/package-report.json
+          python3 scripts/smoke-package-ipa.py --verify .build/ipa/Korg-353-unsigned.ipa
+
+      - name: Upload the unsigned Korg IPA
+        if: steps.supplied.outputs.available == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-unsigned-ipa
+          path: |
+            .build/ipa/Korg-353-unsigned.ipa
+            .build/ipa/Korg-353-unsigned.inspection.json
+            .build/ipa/package-report.json
+          if-no-files-found: error
+          retention-days: 14

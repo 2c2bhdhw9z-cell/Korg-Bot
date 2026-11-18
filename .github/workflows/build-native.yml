@@ -1,0 +1,122 @@
+name: Build Korg loader
+
+on:
+  push:
+    branches: [main, 'maipa-g/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: korg-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  loader:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out Korg
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Check toolchain
+        run: |
+          node --version
+          python3 --version
+          xcodebuild -version
+
+      # Used only by tests/hermes.test.mjs to check that the bundle compiles; it is not bundled into Korg.
+      - name: Install Hermes compiler for the syntax check
+        run: npm install --no-save --no-package-lock --ignore-scripts hermes-compiler@250829098.0.19
+
+      - name: Build and verify local runtime
+        run: |
+          npm run build
+          npm run verify
+          npm test
+          python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Compile and collect native loader
+        run: |
+          mkdir -p .build/native
+          set -o pipefail
+          bash scripts/build-native.sh 2>&1 | tee .build/native/native-build.log
+
+      - name: Upload native diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-native-diagnostics
+          path: .build/native/native-build.log
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Verify collected artifact
+        run: |
+          npm run verify -- artifacts/native/KorgResources.bundle
+          npm test
+
+      - name: Upload loader, resources, source, and licenses
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-original-loader-components
+          path: artifacts/native/
+          if-no-files-found: error
+          retention-days: 14
+
+  # Builds the exact Hermes engine Discord 353 ships and runs Korg's loader core and runtime inside it, on Apple arm64
+  # with libc++ (the device's ABI). This is what finds bugs like a wrong virtual-table slot or Hermes sharing one loop
+  # binding between iterations, neither of which the Node tests can see.
+  engine:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out Korg
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Check out Hermes 250829098.0.15, the engine in Discord 353
+        run: git clone --quiet --depth 1 --branch hermes-v250829098.0.15 https://github.com/facebook/hermes.git "$RUNNER_TEMP/hermes-src"
+
+      - name: Build the Hermes engine
+        run: |
+          cmake -S "$RUNNER_TEMP/hermes-src" -B "$RUNNER_TEMP/hermes-build" -DCMAKE_BUILD_TYPE=Release \
+            -DHERMES_ENABLE_TEST_SUITE=OFF -DHERMES_BUILD_APPLE_FRAMEWORK=OFF -DHERMES_ENABLE_DEBUGGER=OFF
+          cmake --build "$RUNNER_TEMP/hermes-build" --target hermesvm -j 4
+          ls -la "$RUNNER_TEMP/hermes-build/lib" | grep hermesvm
+
+      # Test-only tools: Hermes' compiler for the loop-capture check and Metro's own require polyfill. Neither ships in Korg.
+      - name: Install test tools
+        run: npm install --no-save --no-package-lock --ignore-scripts hermes-compiler@250829098.0.19 metro-runtime@0.88.0
+
+      - name: Run Korg in the real engine
+        run: |
+          set -o pipefail
+          {
+            node --version
+            npm run build
+            # Node 20 and 22 print TAP, not the spec format, when output is piped, so ask for spec explicitly.
+            HERMES_SRC="$RUNNER_TEMP/hermes-src" HERMES_BUILD="$RUNNER_TEMP/hermes-build" \
+              METRO_REQUIRE="$PWD/node_modules/metro-runtime/src/polyfills/require.js" \
+              node --test --test-reporter=spec tests/native-hermes.test.mjs tests/hermes-semantics.test.mjs tests/hermes.test.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/engine-test.txt"
+          # A skipped test also exits 0, so require these to have really run and passed.
+          grep -q "✔ loader core and the Korg runtime work inside a real Hermes engine" "$RUNNER_TEMP/engine-test.txt"
+          grep -q "✔ runtime sources create no closures over loop-scoped variables" "$RUNNER_TEMP/engine-test.txt"
+          grep -q "✔ the built runtime bundle compiles with Hermes" "$RUNNER_TEMP/engine-test.txt"
+
+      # Saved even when the step fails, so the output can be read without signing in to GitHub.
+      - name: Upload engine test output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Korg-engine-test-output
+          path: ${{ runner.temp }}/engine-test.txt
+          if-no-files-found: ignore
+          retention-days: 3
