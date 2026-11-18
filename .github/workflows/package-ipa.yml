@@ -4,7 +4,7 @@ name: Package Korg IPA
 #   push / dispatch without inputs: package a synthetic Discord-353-shaped app with the loader this
 #     commit builds, and upload it as Korg-unsigned-ipa-smoke. This proves the packaging path and the
 #     loader injection on macOS without any proprietary file.
-#   dispatch with an input, or a published release that has a .ipa asset: additionally package *your*
+#   dispatch with an input, or a release (published or draft) that has a .ipa asset: additionally package *your*
 #     Discord 353.0 (build 122208) IPA and upload it as Korg-unsigned-ipa. Nothing has to be uploaded
 #     to a chat: attach the .ipa to a release in this repository and the runner fetches it itself.
 #     See docs/INSTALL.md for what that input must be.
@@ -41,8 +41,11 @@ on:
   release:
     types: [published]
 
+# contents: write is what lets the run see a draft release at all: GitHub only returns drafts to
+# tokens with write access. Keeping the release a draft is how the supplied IPA stays private, and
+# no pull_request trigger exists, so code from a fork never runs with this token.
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 concurrency:
@@ -144,13 +147,40 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.supplied.outputs.release_tag }}
           RELEASE_ASSET: ${{ inputs.ipa_release_asset }}
+          IPA_SHA256: ${{ inputs.ipa_sha256 }}
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/ipa-input"
+          # Not `gh release download`: that looks the tag up first, and a draft is not returned by
+          # the by-tag lookup. Listing releases returns drafts (with contents: write), and the
+          # asset is then fetched by id.
+          gh api "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          release_id="$(jq -r --arg tag "$RELEASE_TAG" '[.[] | select(.tag_name == $tag)][0].id // empty' "$RUNNER_TEMP/releases.json")"
+          if [ -z "$release_id" ]; then
+            echo "No release with tag '$RELEASE_TAG' is visible to this run's token." >&2
+            exit 1
+          fi
+          gh api "repos/$GH_REPO/releases/$release_id/assets?per_page=100" > "$RUNNER_TEMP/assets.json"
           if [ -n "$RELEASE_ASSET" ]; then
-            gh release download "$RELEASE_TAG" --pattern "$RELEASE_ASSET" --dir "$RUNNER_TEMP/ipa-input"
+            jq -r --arg name "$RELEASE_ASSET" '.[] | select(.name == $name) | "\(.id)\t\(.name)"' "$RUNNER_TEMP/assets.json" > "$RUNNER_TEMP/picked.tsv"
           else
-            gh release download "$RELEASE_TAG" --pattern '*.ipa' --dir "$RUNNER_TEMP/ipa-input"
+            jq -r '.[] | select(.name | endswith(".ipa")) | "\(.id)\t\(.name)"' "$RUNNER_TEMP/assets.json" > "$RUNNER_TEMP/picked.tsv"
+          fi
+          if [ ! -s "$RUNNER_TEMP/picked.tsv" ]; then
+            echo "Release $RELEASE_TAG has no matching .ipa asset." >&2
+            exit 1
+          fi
+          while IFS="$(printf '\t')" read -r asset_id asset_name; do
+            gh api -H "Accept: application/octet-stream" "repos/$GH_REPO/releases/assets/$asset_id" \
+              > "$RUNNER_TEMP/ipa-input/$asset_name"
+          done < "$RUNNER_TEMP/picked.tsv"
+          if [ -n "$IPA_SHA256" ]; then
+            ipa="$(find "$RUNNER_TEMP/ipa-input" -name '*.ipa' -type f | head -n 1)"
+            actual="$(shasum -a 256 "$ipa" | cut -d' ' -f1)"
+            if [ "$actual" != "$IPA_SHA256" ]; then
+              echo "Supplied IPA SHA-256 is $actual, not the expected $IPA_SHA256" >&2
+              exit 1
+            fi
           fi
           ls -l "$RUNNER_TEMP/ipa-input"
 
